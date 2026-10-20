@@ -1,0 +1,875 @@
+// Package world 是游戏世界：楼层、实体、移动校验、视野同步、传送与聊天。
+// 所有状态只在 World.run 这一个协程里读写，外部通过 World.Do 投递指令，因此不需要锁。
+package world
+
+import (
+	"context"
+	"log/slog"
+	"math/rand/v2"
+	"slices"
+	"sync"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"sa/server/internal/battle"
+	"sa/server/internal/data"
+	"sa/server/internal/proto"
+	"sa/server/internal/store"
+)
+
+const (
+	ViewRadius   = 16                     // 视野半径（格）。原客户端一屏约 ±13 格，多留几格避免边缘闪现
+	MinStepGap   = 200 * time.Millisecond // 两步之间的最短间隔（客户端每步约 260ms）
+	StepBurst    = 3                      // 允许网络抖动造成的连续快步数
+	MaxMapReq    = 64                     // 一次 MapReq 的最大边长
+	MaxChatRunes = 120
+	SaveInterval = 30 * time.Second
+	// 多久按 SA 时间检查一次 TimeMan 的图（原版是周围有人动作时 NPC_TimeManWatch 检查；一个 SA 时约 5.3 秒）
+	timeManInterval = 5 * time.Second
+	npcIDBase       = 1_000_000
+)
+
+// Client 是世界向一个在线玩家发送消息的出口（由网络层实现）。
+type Client interface {
+	Send(m proto.Message)
+	Kick(reason string)
+}
+
+// MOVE 为客户端方向 0..7 的格子位移（原客户端 map.cpp moveAddTbl）。
+var MOVE = [8][2]int{{-1, 1}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}}
+
+type entity struct {
+	id               int
+	kind             string // "player" / "npc"
+	name             string
+	sprite           int
+	floor, x, y, dir int
+	client           Client       // 玩家才有
+	party            *party       // 组队（party.go）
+	fs               int          // FS 开关（fsParty 等）
+	trade            *trade       // 交易中（trade.go）
+	act              int          // 身上的动作（action.go）：0 没有，否则动作编号 + 1
+	book             *addressBook // 名片匣（addressbook.go）
+	petMails         int          // 在外面的邮件宠物（CHAR_PETMAILNUMS）
+	petMailAt        time.Time    // 下次可以寄宠物邮件的时间
+	duelCool         time.Time    // 这之前不能 PK（_BATTLE_OVER_STAR_TIME）
+	rankStart        int          // 强者表现在的第一行（CHAR_WORKSHOPRELEVANT）
+	fm               famView      // 家族的快照（family.go）
+	fmc              fmChar       // 存在角色上的家族资料（个人气势、家族银行个人帐户）
+	char             store.Character
+	visible          map[int]bool // 玩家当前能看到的实体
+	stepTokens       float64
+	lastStep         time.Time
+	npc              *data.NPC          // NPC 才有：对话行为与内容
+	cep              int                // 遇敌值（原版 CONNECT_get_CEP）
+	luck             int                // 运气 1..5，上线时抽（CHAR_setLuck）
+	fight            *fight             // 战斗中
+	window           *npcWindow         // 打开中的 NPC 窗口
+	inv              *inventory         // 道具与装备
+	pets             *petBag            // 宠物栏（pet.go）
+	magic            *battle.MagicSkill // 魔法熟练度与抗魔（characters.magic）
+	noenemy          int                // 驱魔（ITEM_useNoenemy）：剩下的分钟数，> 0 不遇敌（原版记在连线上，不存档）
+	stay             bool               // 原地遇敌（ITEM_useEncounter / UseDeathCounter），走动或传送就取消
+	water            int                // 水中呼吸剩下的分钟数（鱼鳃草，CHAR_WORKSTATUSWATER，不存档）
+	lastMerge        int64              // 上次加工 / 料理的时间（CHAR_WORKLASTMERGETIME，unix 秒）
+	ground           *ground            // 地上的道具 / 石币 / 宠物才有（ground.go）
+	addExp           addExp             // 智慧之果（itemuse.go）
+	metamo           *metamoState       // 变身中（itemuse.go）
+	level            int                // 地上的宠物的等级（滑鼠停着时显示）
+}
+
+// hidden：按时间出现的人不在的时候（图号 9999）看不到。
+func (e *entity) hidden() bool { return e.npc != nil && e.sprite == timeManHidden }
+
+func (e *entity) info() proto.ObjInfo {
+	m := e.mark() // 头上的队长 / 战斗记号（CHAR_sendCharaAtWalk 补送的 CA）
+	return proto.ObjInfo{ID: e.id, Kind: e.kind, Name: e.name, Sprite: e.sprite, X: e.x, Y: e.y, Dir: e.dir, Level: e.level,
+		Leader: m.Leader, Battle: m.Battle, Help: m.Help, Action: e.act - 1, Family: e.fm.Name}
+}
+
+type World struct {
+	game       *data.Game
+	db         store.Store
+	log        *slog.Logger
+	cmds       chan func()
+	floors     map[int]map[int]*entity // 楼层 → 实体
+	players    map[int]*entity         // 角色 ID → 实体
+	mergeCache []mergeTarget           // 能加工出来的道具（merge.go，第一次加工时建立）
+	now        func() time.Time
+	rnd        *rand.Rand
+	// groundSeq 编地上物的 id（groundIDBase 起）；ticks 是时钟跳了几次（5 秒一次）
+	groundSeq, ticks int
+	partyWarping     bool // 正在把队员跟着队长传送
+	battleSeq        int  // 战斗的编号（地图上的战斗记号 CG_VS_MARK 按它轮换）
+	GM               bool // 允许调试指令（开发用，见 gm.go）
+	// saves 是存档队列：由一个协程按顺序写库，保证同一角色的新存档不会被旧存档盖掉
+	saves   chan func()
+	started time.Time          // 开机时间（记录点报"本星球已经启动了…"）
+	timeMen []*entity          // 按时间换图的 NPC（TimeMan）
+	quizzes map[int]*quizState // 角色 ID → 正在进行的猜谜（quiz.go）
+	fam     *Families          // 家族（所有线路共用，family.go）
+	// inbox 是别的线路送来的事（post），世界协程在 Do 之后与 wake 时做
+	inboxMu sync.Mutex
+	inbox   []func()
+	wake    chan struct{}
+}
+
+// New 创建一条线路的世界。seed 决定 NPC 的随机出生位置（不同线路的 NPC 站位可以不同）。
+func New(game *data.Game, db store.Store, log *slog.Logger, seed int64) *World {
+	w := &World{game: game, db: db, log: log, cmds: make(chan func(), 1024),
+		floors: map[int]map[int]*entity{}, players: map[int]*entity{}, now: time.Now,
+		rnd: rand.New(rand.NewPCG(uint64(seed), 1)), saves: make(chan func(), 4096), started: time.Now(),
+		quizzes: map[int]*quizState{}, wake: make(chan struct{}, 1)}
+	w.fam = NewFamilies(db, log)
+	go func() {
+		for f := range w.saves {
+			f()
+		}
+	}()
+	id := npcIDBase
+	floors := make([]int, 0, len(game.NPCs))
+	for f := range game.NPCs {
+		floors = append(floors, f)
+	}
+	slices.Sort(floors) // 固定遍历顺序，同一 seed 得到同样的站位
+	for _, floor := range floors {
+		for i := range game.NPCs[floor] {
+			n := &game.NPCs[floor][i]
+			x, y := w.bornPoint(n)
+			id++
+			e := &entity{id: id, kind: "npc", name: n.Name, sprite: n.Sprite, floor: floor, x: x, y: y, dir: n.Dir, npc: n}
+			w.addToFloor(e)
+			if n.Function == "TimeMan" {
+				w.timeMen = append(w.timeMen, e)
+			}
+		}
+	}
+	w.updateTimeMen()
+	return w
+}
+
+// bornPoint 在出生矩形内随机挑一格可走的位置（原版 npcgen 在 borncenter 范围内随机出生）；找不到时用中心点。
+func (w *World) bornPoint(n *data.NPC) (int, int) {
+	f := w.game.Floors[n.Floor]
+	if n.X2 > n.X1 || n.Y2 > n.Y1 {
+		for try := 0; try < 20; try++ {
+			x := n.X1 + w.rnd.IntN(n.X2-n.X1+1)
+			y := n.Y1 + w.rnd.IntN(n.Y2-n.Y1+1)
+			if w.game.Tiles.Walkable(f, x, y) {
+				return x, y
+			}
+		}
+	}
+	return n.X, n.Y
+}
+
+// Run 处理指令直到 ctx 结束；退出前保存所有在线角色的位置。
+func (w *World) Run(ctx context.Context) {
+	save := time.NewTicker(SaveInterval)
+	defer save.Stop()
+	clock := time.NewTicker(timeManInterval)
+	defer clock.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			for _, e := range w.players {
+				w.save(e)
+				w.saveProgress(e)
+			}
+			// 等存档队列写完再退出
+			done := make(chan struct{})
+			w.saves <- func() { close(done) }
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+			}
+			return
+		case f := <-w.cmds:
+			f()
+		case <-w.wake:
+			w.drain()
+		case <-save.C:
+			w.saveAll()
+		case <-clock.C:
+			w.updateTimeMen()
+			w.sweepGround()
+			w.tickPlayers()
+		}
+	}
+}
+
+// Do 把 f 投递到世界协程执行，并等待它完成。
+func (w *World) Do(f func()) {
+	done := make(chan struct{})
+	w.cmds <- func() { f(); w.drain(); close(done) }
+	<-done
+}
+
+// post 把 f 交给世界协程稍后执行，不等待、不会阻塞（别的线路、家族资料送来的事用它，避免互相等待）。
+func (w *World) post(f func()) {
+	w.inboxMu.Lock()
+	w.inbox = append(w.inbox, f)
+	w.inboxMu.Unlock()
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (w *World) drain() {
+	for {
+		w.inboxMu.Lock()
+		fs := w.inbox
+		w.inbox = nil
+		w.inboxMu.Unlock()
+		if len(fs) == 0 {
+			return
+		}
+		for _, f := range fs {
+			f()
+		}
+	}
+}
+
+// Families 回传这条线路用的家族资料；ShareFamilies 让几条线路共用同一份（cmd/saserver 在 Run 之前设定）。
+func (w *World) Families() *Families     { return w.fam }
+func (w *World) ShareFamilies(f *Families) { w.fam = f }
+
+// ---------------- 进入与离开 ----------------
+
+// Enter 让角色上线；同一角色已在线时踢掉旧连接。返回实体 ID。
+func (w *World) Enter(c store.Character, cl Client) {
+	w.Do(func() {
+		if old := w.players[int(c.ID)]; old != nil {
+			old.client.Kick("角色在别处登录")
+			w.leave(old)
+		}
+		f := w.game.Floors[c.Floor]
+		if f == nil || !w.game.Tiles.Walkable(f, c.X, c.Y) {
+			h := data.Hometowns[max(0, min(c.Hometown, len(data.Hometowns)-1))]
+			c.Floor, c.X, c.Y = h.Floor, h.X, h.Y
+		}
+		e := &entity{id: int(c.ID), kind: "player", name: c.Name, sprite: c.Sprite, floor: c.Floor, x: c.X, y: c.Y,
+			dir: c.Dir, client: cl, char: c, visible: map[int]bool{}, stepTokens: StepBurst}
+		w.players[e.id] = e
+		e.luck = battle.RollLuck(w.rnd)
+		e.inv = parseInventory(c.Items)
+		e.pets = parsePets(c.Pets)
+		e.magic = parseMagic(c.Magic)
+		e.addExp = parseAddExp(c.AddExp)
+		e.book = parseAddressBook(c.AddressBook)
+		e.fmc = parseFmChar(c.Family)
+		e.sprite = w.equipSprite(e)
+		e.fs = fsParty // 上线时组队开着（_ALWAYS_TEAM_OPEN），交易、名片关着（char.c CHAR_ISTRADE / ISTRADECARD = 0）
+		cl.Send(&proto.Self{ID: e.id, Name: e.name, Sprite: e.sprite})
+		w.famLogin(e) // ACFMCharLogin：F 状态、家族频道
+		cl.Send(&proto.Flags{Flags: e.fs})
+		cl.Send(w.statusOf(e))
+		w.sendInventory(e)
+		w.sendPets(e)
+		w.placeOnFloor(e, c.Floor, c.X, c.Y, c.Dir)
+		w.notifyLoginLogout(e, true) // 名片上的在线
+		w.deliverStoredMails(e)      // MessageFlush
+		w.returnAwayPets(e)
+		w.log.Info("上线", "char", e.name, "floor", e.floor, "x", e.x, "y", e.y)
+	})
+}
+
+// Leave 让角色下线并存档。只有当前在线的正是这个连接时才生效：
+// 被顶号的旧连接断开时，不能把新连接的角色也带下线。
+func (w *World) Leave(charID int, cl Client) {
+	w.Do(func() {
+		if e := w.players[charID]; e != nil && e.client == cl {
+			w.leave(e)
+		}
+	})
+}
+
+func (w *World) leave(e *entity) {
+	w.abandonBattle(e)
+	w.cancelTrade(e)
+	w.leaveParty(e, true) // _CHAR_logout：CHAR_DischargeParty
+	w.removeFromFloor(e)
+	delete(w.players, e.id)
+	w.notifyLoginLogout(e, false)
+	w.famLogout(e)
+	w.save(e)
+	w.log.Info("下线", "char", e.name)
+}
+
+// ---------------- 玩家指令 ----------------
+
+func (w *World) Move(charID, x, y, dir int) {
+	w.Do(func() {
+		e := w.players[charID]
+		if e == nil {
+			return
+		}
+		if e.fight != nil || e.isFollower() || e.trade != nil {
+			// 战斗中不能走；队员不能自己走（CHAR_walk_init 只收转身）；交易中不能走
+			e.client.Send(&proto.PosCorrect{X: e.x, Y: e.y, Dir: e.dir})
+			return
+		}
+		f := w.game.Floors[e.floor]
+		ok := dir >= 0 && dir < 8 && x == e.x && y == e.y && w.takeStepToken(e)
+		nx, ny := e.x, e.y
+		if ok {
+			nx, ny = e.x+MOVE[dir][0], e.y+MOVE[dir][1]
+			ok = w.game.Tiles.Walkable(f, nx, ny)
+		}
+		if !ok {
+			e.client.Send(&proto.PosCorrect{X: e.x, Y: e.y, Dir: e.dir})
+			return
+		}
+		ox, oy := e.x, e.y
+		e.x, e.y, e.dir = nx, ny, dir
+		e.clearAction()
+		if warp, found := w.game.WarpAt(e.floor, nx, ny); found {
+			w.placeOnFloor(e, warp.ToFloor, warp.ToX, warp.ToY, e.dir)
+			return
+		}
+		w.broadcastMove(e)
+		w.partyFollow(e, ox, oy)
+		e.stay = false // 走一步就不再原地遇敌（clearStayEncount）
+		w.rollEncounter(e)
+	})
+}
+
+// takeStepToken 是简单的令牌桶：平均不快于 MinStepGap 一步，允许 StepBurst 步的突发。
+func (w *World) takeStepToken(e *entity) bool {
+	now := w.now()
+	if !e.lastStep.IsZero() {
+		e.stepTokens = min(StepBurst, e.stepTokens+float64(now.Sub(e.lastStep))/float64(MinStepGap))
+	}
+	e.lastStep = now
+	if e.stepTokens < 1 {
+		return false
+	}
+	e.stepTokens--
+	return true
+}
+
+func (w *World) Turn(charID, dir int) {
+	w.Do(func() {
+		e := w.players[charID]
+		if e == nil || dir < 0 || dir >= 8 {
+			return
+		}
+		e.dir = dir
+		for _, o := range w.floors[e.floor] {
+			if o != e && o.client != nil && o.visible[e.id] {
+				o.client.Send(&proto.ObjTurn{ID: e.id, Dir: dir})
+			}
+		}
+	})
+}
+
+// Talk 与 NPC 对话。规则来自原版：
+//   - TownPeople（npc_townpeople.c）：玩家在 NPC 前方 3 格内并面朝它，随机回一句（台词以逗号分隔）
+//   - SignBoard（npc_signboard.c）：玩家与告示牌距离不超过 1，弹窗显示全文
+//
+// 原版要求玩家先面朝 NPC；这里由服务端替玩家转身并广播，省去客户端额外的转向请求。
+func (w *World) Talk(charID, npcID int) {
+	w.Do(func() {
+		p := w.players[charID]
+		if p == nil {
+			return
+		}
+		n := w.floors[p.floor][npcID]
+		if n == nil || n.npc == nil || n.npc.Function == "" || n.hidden() || p.fight != nil {
+			return
+		}
+		dist := max(abs(n.x-p.x), abs(n.y-p.y))
+		switch n.npc.Function {
+		case "TownPeople":
+			if dist > 3 {
+				return
+			}
+			w.face(p, n)
+			if n.npc.Text == "" {
+				return
+			}
+			lines := strings.Split(n.npc.Text, ",")
+			p.client.Send(&proto.NpcTalk{ID: n.id, Name: n.name, Text: strings.TrimSpace(lines[w.rnd.IntN(len(lines))])})
+		case "SignBoard":
+			if dist > 1 || n.npc.Text == "" {
+				return
+			}
+			w.face(p, n)
+			p.client.Send(&proto.NpcTalk{ID: n.id, Name: n.name, Text: npcText(w.manorText(n.npc.Text)), Window: true}) // 告示牌文字里写成两个字的 \n 是换行
+		case "WindowHealer", "Healer":
+			if dist > healerRange(n) {
+				return
+			}
+			w.face(p, n)
+			w.healerOpen(p, n)
+		case "WarpMan":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.warpmanTalk(p, n, "")
+		case "Windowman":
+			if dist > 1 {
+				return
+			}
+			w.face(p, n)
+			w.windowmanOpen(p, n, 1)
+		case "SavePoint":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.savePointTalk(p, n)
+		case "TimeMan":
+			if dist > 3 {
+				return
+			}
+			w.face(p, n)
+			w.timeManTalk(p, n)
+		case "ItemShop":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.shopTalk(p, n, "")
+		case "PoolItemShop":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.poolShopOpen(p, n)
+		case "Dengon":
+			if dist > 3 { // DENGONDISTANCE
+				return
+			}
+			w.face(p, n)
+			w.dengonOpen(p, n)
+		case "Bankman":
+			if dist > 1 {
+				return
+			}
+			w.face(p, n)
+			w.windowmanOpen(p, n, 1) // NPC_Bankman_selectWindow 与万事通相同
+		case "Charm":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.charmOpen(p, n)
+		case "LuckyMan":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.luckyOpen(p, n)
+		case "Duelranking": // NPC_DuelrankingLooked（原版是"看"不是说话，这里点它就算）
+			w.duelRankingOpen(p, n)
+		case "Janken":
+			if dist > 1 {
+				return
+			}
+			w.face(p, n)
+			w.jankenOpen(p, n)
+		case "ExChangeMan":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.exchangeTalk(p, n, "")
+		case "NPCEnemy":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.npcEnemyTalk(p, n)
+		case "Quiz":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.quizTalk(p, n)
+		case "ItemchangeMan":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.itemChangeOpen(p, n)
+		case "Riderman":
+			if dist > 1 {
+				return
+			}
+			w.face(p, n)
+			w.windowmanOpen(p, n, 1) // NPC_Riderman_selectWindow(1)
+		case "Familyman": // NPC_FamilymanLooked
+			w.face(p, n)
+			w.familymanTalk(p, n)
+		case "FmDengon": // _FM_MODIFY 的 NPC_FmDengonLooked 不检查距离；这里照传言板 3 格
+			if dist > 3 {
+				return
+			}
+			w.face(p, n)
+			w.fmDengonTalk(p)
+		case "FmLetter":
+			if dist > 1 {
+				return
+			}
+			w.face(p, n)
+			w.fmLetterTalk(p, n)
+		case "FmHealer":
+			if dist > 1 {
+				return
+			}
+			w.face(p, n)
+			w.fmHealerTalk(p, n)
+		case "PetShop":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.petShopTalk(p, n)
+		case "PetSkillShop":
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.petSkillShopOpen(p, n)
+		case "Action":
+			if dist > 1 {
+				return
+			}
+			w.face(p, n)
+			w.actionTalk(p, n)
+		}
+	})
+}
+
+// face 让 p 转向 t（八方向中最接近的一个）并通知周围玩家。
+func (w *World) face(p, t *entity) {
+	dx, dy := sign(t.x-p.x), sign(t.y-p.y)
+	for d, m := range MOVE {
+		if m[0] == dx && m[1] == dy && p.dir != d {
+			p.dir = d
+			for _, o := range w.floors[p.floor] {
+				if o.client != nil && (o == p || o.visible[p.id]) {
+					o.client.Send(&proto.ObjTurn{ID: p.id, Dir: d})
+				}
+			}
+		}
+	}
+}
+
+func sign(v int) int {
+	switch {
+	case v > 0:
+		return 1
+	case v < 0:
+		return -1
+	}
+	return 0
+}
+
+func (w *World) MapReq(charID, floor, x1, y1, x2, y2 int) {
+	w.Do(func() {
+		e := w.players[charID]
+		if e == nil || floor != e.floor || x2 <= x1 || y2 <= y1 || x2-x1 > MaxMapReq || y2-y1 > MaxMapReq {
+			return
+		}
+		f := w.game.Floors[floor]
+		n := (x2 - x1) * (y2 - y1)
+		md := &proto.MapData{Floor: floor, X1: x1, Y1: y1, X2: x2, Y2: y2, Tiles: make([]int, n), Objs: make([]int, n)}
+		// walk：每格一个字符，'1' 可走、'0' 不可走、'2' 传送点。由服务端按 mapset 规则算好，客户端预判与服务端一致
+		walk := make([]byte, n)
+		i := 0
+		for y := y1; y < y2; y++ {
+			for x := x1; x < x2; x++ {
+				walk[i] = '0'
+				if f.In(x, y) {
+					md.Tiles[i], md.Objs[i] = int(f.Tiles[y*f.W+x]), int(f.Objs[y*f.W+x])
+					if _, ok := w.game.WarpAt(floor, x, y); ok {
+						walk[i] = '2'
+					} else if w.game.Tiles.Walkable(f, x, y) {
+						walk[i] = '1'
+					}
+				}
+				i++
+			}
+		}
+		md.Walk = string(walk)
+		e.client.Send(md)
+	})
+}
+
+// Chat 发言。color 为原版文字调色 0..9（FONT_PAL_*）；area 为聊天设定里的"音量"1..10（原版 NowMaxVoice）。
+// 附近频道按原版 CHAR_Talk 决定听得到的范围：音量 = area-1+句末'!'个数，范围查 chatvol 表；
+// 以"..."结尾是悄悄话，只有脚下和面前一格的人听得到。
+func (w *World) Chat(charID int, channel, text string, color, area int) {
+	w.Do(func() {
+		e := w.players[charID]
+		if e == nil || text == "" || !utf8.ValidString(text) {
+			return
+		}
+		if utf8.RuneCountInString(text) > MaxChatRunes {
+			text = string([]rune(text)[:MaxChatRunes])
+		}
+		if w.GM && strings.HasPrefix(text, "/") && w.gmCommand(e, text) {
+			return
+		}
+		if color < 0 || color >= FontPalCount {
+			color = 0
+		}
+		msg := &proto.ChatMsg{Channel: channel, FromID: e.id, From: e.name, Text: text, Color: color}
+		switch channel {
+		case "world":
+			for _, p := range w.players {
+				p.client.Send(msg)
+			}
+		case "family": // 家族频道（客户端的 /FM）
+			w.familyChat(e, msg)
+		case "party":
+			// 队伍频道（CHAR_ISPARTYCHAT）：只有同一队的人听得到，"[队]" 开头（_CHANNEL_MODIFY 的 P|T|）
+			if e.party == nil {
+				return
+			}
+			msg.Text = "[队]" + text
+			for _, m := range e.party.slots {
+				if m != nil {
+					m.client.Send(msg)
+				}
+			}
+		default:
+			msg.Channel = "near"
+			hear := chatHears(e, text, area)
+			for _, o := range w.floors[e.floor] {
+				if o.client != nil && (o == e || (o.visible[e.id] && hear(o))) {
+					o.client.Send(msg)
+				}
+			}
+			w.talkAction(e, text)
+			if e.party != nil { // CHAR_Talk：队员不管多远都听得到
+				for _, m := range e.party.slots {
+					if m != nil && m != e && !(m.floor == e.floor && m.visible[e.id] && hear(m)) {
+						m.client.Send(msg)
+					}
+				}
+			}
+			// 原版 CHAR_Talk 会把话转给听得到的 NPC（Talked）；用得到说的内容的是带暗语（warp_msg）的传送员和道具店（buy_msg 等）
+			if e.fight == nil {
+				for _, o := range w.floors[e.floor] {
+					if o.npc == nil || !hear(o) || e.window != nil && e.window.kind == "shop" {
+						continue
+					}
+					switch {
+					case o.npc.Function == "WarpMan" && strings.Contains(o.npc.Arg, "warp_msg"):
+						w.warpmanTalk(e, o, text)
+					case o.npc.Function == "ItemShop":
+						w.shopTalk(e, o, text)
+					case o.npc.Function == "ExChangeMan" && strings.Contains(o.npc.Arg, "KeyWord"):
+						w.exchangeTalk(e, o, text)
+					case o.npc.Function == "Mic":
+						w.micTalk(e, o, text)
+					}
+				}
+			}
+		}
+	})
+}
+
+// FontPalCount 原版 FONT_PAL_NUM：可选的文字颜色数。
+const FontPalCount = 10
+
+// chatVolumeRange 原版 char_talk.c CHAR_getRangeFromVolume 的 chatvol 表。
+var chatVolumeRange = []int{3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31}
+
+// textVolume 原版 CHAR_getVolume：句末每个'!'加大一级音量，"..."结尾返回 -1（悄悄话）。
+func textVolume(s string) int {
+	switch {
+	case len(s) >= 3 && strings.HasSuffix(s, "..."):
+		return -1
+	case strings.HasSuffix(s, "."):
+		return 0
+	}
+	return len(s) - len(strings.TrimRight(s, "!"))
+}
+
+// chatHears 返回判断某个实体能否听到 e 这句话的函数。
+func chatHears(e *entity, text string, area int) func(o *entity) bool {
+	if area <= 0 {
+		area = 3 // 原版：area 为 0 时按 3
+	}
+	v := textVolume(text)
+	if v < 0 {
+		fx, fy := e.x+MOVE[e.dir][0], e.y+MOVE[e.dir][1]
+		return func(o *entity) bool { return (o.x == e.x && o.y == e.y) || (o.x == fx && o.y == fy) }
+	}
+	r := chatVolumeRange[min(area-1+v, len(chatVolumeRange)-1)]
+	return func(o *entity) bool { return abs(o.x-e.x) <= r && abs(o.y-e.y) <= r }
+}
+
+// ReturnHome 回记录点（原版 _CHAR_NEWLOGOUT 的 CharLogout(1)：不下线，传回 CHAR_LASTTALKELDER 的长老位置）。
+// 没在记录点登记过时是出生村落的村长家门口。
+func (w *World) ReturnHome(charID int) {
+	w.Do(func() {
+		e := w.players[charID]
+		if e == nil {
+			return
+		}
+		if e.isFollower() {
+			w.sysMsg(e, "团队中无法回纪录点！", colorYellow) // lssproto_CharLogout_recv：队员不能回记录点，队长回就全队一起
+			return
+		}
+		h := w.elderPos(e)
+		w.placeOnFloor(e, h.Floor, h.X, h.Y, e.dir)
+		w.save(e)
+	})
+}
+
+// ---------------- 楼层与视野 ----------------
+
+func (w *World) addToFloor(e *entity) {
+	if w.floors[e.floor] == nil {
+		w.floors[e.floor] = map[int]*entity{}
+	}
+	w.floors[e.floor][e.id] = e
+}
+
+// placeOnFloor 把玩家放到某楼层的某格（上线或传送），发 EnterFloor 并重建视野。
+func (w *World) placeOnFloor(e *entity, floor, x, y, dir int) {
+	e.stay = false
+	e.clearAction()
+	w.cancelTrade(e)
+	w.removeFromFloor(e)
+	e.floor, e.x, e.y, e.dir = floor, x, y, dir
+	w.addToFloor(e)
+	f := w.game.Floors[floor]
+	e.client.Send(&proto.EnterFloor{Floor: floor, Name: f.Name, Palette: f.Palette, Width: f.W, Height: f.H, X: x, Y: y, Dir: dir})
+	e.visible = map[int]bool{}
+	w.refreshView(e)
+	w.announce(e)
+	switch {
+	case e.isLeader() && !w.partyWarping:
+		// 队长传送时队员传到同一格（EVENT_onWarpNPC、MAPPOINT_MapWarpHandle、回记录点都是全队一起）
+		w.partyWarping = true
+		for _, m := range e.party.slots[1:] {
+			if m != nil && m.fight == nil {
+				w.placeOnFloor(m, floor, x, y, dir)
+			}
+		}
+		w.partyWarping = false
+	case e.isFollower() && !w.partyWarping:
+		w.leaveParty(e, true) // 队员自己被传走就离队（原版留在队伍里但跟不上）
+	}
+}
+
+// removeFromFloor 从当前楼层移除，并让看得到它的玩家删掉它。
+func (w *World) removeFromFloor(e *entity) {
+	for _, o := range w.floors[e.floor] {
+		if o != e && o.client != nil && o.visible[e.id] {
+			delete(o.visible, e.id)
+			o.client.Send(&proto.ObjDisappear{IDs: []int{e.id}})
+		}
+	}
+	delete(w.floors[e.floor], e.id)
+}
+
+func near(a, b *entity) bool {
+	return a.floor == b.floor && !a.hidden() && !b.hidden() && abs(a.x-b.x) <= ViewRadius && abs(a.y-b.y) <= ViewRadius
+}
+
+// refreshView 重新计算 e 能看到的实体，发出增减。
+func (w *World) refreshView(e *entity) {
+	appear := []proto.ObjInfo{}
+	gone := []int{}
+	for _, o := range w.floors[e.floor] {
+		if o == e {
+			continue
+		}
+		in := near(e, o)
+		if in && !e.visible[o.id] {
+			e.visible[o.id] = true
+			appear = append(appear, o.info())
+		} else if !in && e.visible[o.id] {
+			delete(e.visible, o.id)
+			gone = append(gone, o.id)
+		}
+	}
+	for id := range e.visible {
+		if o := w.floors[e.floor][id]; o == nil {
+			delete(e.visible, id)
+			gone = append(gone, id)
+		}
+	}
+	if len(appear) > 0 {
+		e.client.Send(&proto.ObjAppear{Objs: appear})
+	}
+	if len(gone) > 0 {
+		e.client.Send(&proto.ObjDisappear{IDs: gone})
+	}
+}
+
+// announce 让附近的其他玩家看到 e（新出现）。
+func (w *World) announce(e *entity) {
+	for _, o := range w.floors[e.floor] {
+		if o != e && o.client != nil && near(o, e) && !o.visible[e.id] {
+			o.visible[e.id] = true
+			o.client.Send(&proto.ObjAppear{Objs: []proto.ObjInfo{e.info()}})
+		}
+	}
+}
+
+// broadcastMove 在 e 走了一步之后：更新它自己的视野，并通知其他玩家（移动 / 出现 / 消失）。
+func (w *World) broadcastMove(e *entity) {
+	w.refreshView(e)
+	for _, o := range w.floors[e.floor] {
+		if o == e || o.client == nil {
+			continue
+		}
+		in := near(o, e)
+		switch {
+		case in && o.visible[e.id]:
+			o.client.Send(&proto.ObjMove{ID: e.id, X: e.x, Y: e.y, Dir: e.dir})
+		case in:
+			o.visible[e.id] = true
+			o.client.Send(&proto.ObjAppear{Objs: []proto.ObjInfo{e.info()}})
+		case o.visible[e.id]:
+			delete(o.visible, e.id)
+			o.client.Send(&proto.ObjDisappear{IDs: []int{e.id}})
+		}
+	}
+}
+
+// ---------------- 存档 ----------------
+
+// save 在后台写库，不阻塞世界协程。
+func (w *World) save(e *entity) {
+	id, fl, x, y, d := e.char.ID, e.floor, e.x, e.y, e.dir
+	w.saves <- func() { w.write(id, fl, x, y, d) }
+}
+
+func (w *World) write(id int64, fl, x, y, d int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := w.db.SavePosition(ctx, id, fl, x, y, d); err != nil {
+		w.log.Error("存档失败", "char", id, "err", err)
+	}
+}
+
+func (w *World) saveAll() {
+	for _, e := range w.players {
+		w.save(e)
+	}
+}
+
+// Online 返回在线人数（调试用）。
+func (w *World) Online() (n int) {
+	w.Do(func() { n = len(w.players) })
+	return
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}

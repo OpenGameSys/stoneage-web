@@ -1,0 +1,8 @@
+# 源码与文档：仓库里一律 LF
+* text=auto eol=lf
+
+# 原版数据（GBK 文本与二进制地图）和导出的资源：原样保存，不做换行转换
+gamedata/** -text
+assets/** -text
+*.exe binary
+*.db binary

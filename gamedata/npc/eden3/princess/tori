@@ -1,0 +1,83 @@
+#### 奶妈多莉 ####
+NomalMainMsg:我最担心的，还是公主嫁了之后会不会幸福…。
+
+#### 60任务中 对话 ####
+EventNo:-1
+TYPE:MESSAGE
+EVENT:LV>140&TRANS>5&ENDEV=184&ENDEV=185&ENDEV=60
+NomalWindowMsg:真的衷心祝愿青蛙国的王子能够成功！！！！
+EventEnd
+
+###60完成 带着发恰和画像 收走 给眼泪###
+EventNo:60
+TYPE:ACCEPT
+EVENT:LV>140&TRANS>5&ENDEV=184&ENDEV=185&NOWEV=60&ITEM=21143&ITEM=21145
+AcceptMsg1:你真的找回了小公主的发卡，太好了！
+AcceptMsg2:我把发卡给了小公主后，她果然感激得落泪了，我把你的事情转告给她之后，她让我把这滴眼泪交给你。
+ThanksMsg1:真的衷心祝愿青蛙国的王子能够成功！！！！
+ItemFullMsg:你道具已经满了，我的东西不能给你...
+DelItem:21143,21145
+GetItem:21146*1
+EndSetFlg:60
+EventEnd
+
+#### 60任务中 对话 ####
+EventNo:-1
+TYPE:MESSAGE
+EVENT:LV>140&TRANS>5&ENDEV=184&ENDEV=185&NOWEV=60
+NomalWindowMsg:还不快去找呀？不想要公主的眼泪了吗？公主都快急死了！！！！！
+EventEnd
+
+###接任务（开标60）###
+EventNo:60
+TYPE:REQUEST
+EVENT:LV>140&TRANS>5&ENDEV=184&ENDEV=185&ENDEV=58&NOWEV=59
+RequestMsg1:你说什么？你需要我们小公主的眼泪，可是我们的小公主很少有流泪的时候。
+RequestMsg2:不过近来小公主为了找寻她丢失的发卡很是着急，如果你能帮她找到失落的发卡的话，说不定她会感动的流泪。
+ThanksMsg1:据说小公主最后看到他发卡的地方，是在北岛的「柯尔克村」，然后便不知去向了。这个是公主小的时候，带着那个发卡的画像，你可以去找找看噢！
+ItemFullMsg:身上道具太多了喔！
+GetItem:21143
+EventEnd
+
+
+#### 任务结束后对话 ####
+EventNo:-1
+TYPE:MESSAGE
+EVENT:LV>89&ENDEV=4&ENDEV=81&ENDEV=112&ENDEV=116
+NomalWindowMsg:还好他们小两口终于顺利的见过面了，这都得谢谢你呢。
+EventEnd
+
+####标正确给公主人宠
+EventNo:124
+TYPE:ACCEPT
+EVENT:LV>89&ENDEV=4&ENDEV=81&ENDEV=112&NOWEV=116&NOWEV=124
+AcceptMsg:没办法，我说不动她，毕竟年轻人心都是向着外面的，让她出去见识见识也好。
+ThanksMsg:我们的小公主非常顽皮，而且她很想看看那个吉德长什么样，毕竟他们将要相守一辈子。只好请你照顾她了…。
+PetFullMsg:哎呀，你都带着这么多宠物到处走吗？那我的公主可不能跟你去。
+GetPet:1893
+EndSetFlg:124
+EventEnd
+
+#### 已得公主对话 ####
+EventNo:-1
+TYPE:MESSAGE
+EVENT:LV>89&ENDEV=4&ENDEV=81&ENDEV=112&ENDEV=124
+NomalWindowMsg:请你好好替我照顾公主，我实在很担心。
+EventEnd
+
+### 收信开１１６  ###
+EventNo:116
+TYPE:REQUEST
+EVENT:LV>89&ENDEV=4&ENDEV=81&ENDEV=112&NOWEV=124
+RequestMsg1:我是公主的奶妈，二十年来我辛苦的把她带大，现在看到她要嫁人，心里还真是高兴又有点舍不得。
+RequestMsg2:唉，公主一听到你要去找寻吉德王子，就一直吵着也要跟去；真是拿他没办法。
+RequestMsg3:请等我一下，我再试试看能不能说服她，实在不敢让她出这种远门，我会担心的睡不着。
+ThanksMsg:等我跟公主再商量一下。
+EventEnd
+
+#### 未接任务对话 ####
+EventNo:-1
+TYPE:MESSAGE
+EVENT:LV>0
+NomalWindowMsg:是外来的客人吗？我要忙着照顾我们的小公主呢。
+EventEnd

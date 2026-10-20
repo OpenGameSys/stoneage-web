@@ -1,0 +1,564 @@
+// 地图场景：地图区块缓存、主角移动预测、其他角色同步、渲染列表。
+// 坐标、方向、投影沿用原客户端（map.cpp）：
+//   屏幕 x = (gx + gy) × 32，屏幕 y = (gy − gx) × 24
+//   方向 0..7 的格子位移 = moveAddTbl；0 朝下，2 朝左，4 朝上，6 朝右
+
+import { album } from "./album.ts";
+import { ANIM, findAction, type Assets } from "./assets.ts";
+import type { Connection } from "./net.ts";
+import type { ObjInfo, S2CEnterFloor, S2CMapData } from "./proto.gen.ts";
+import type { Quad } from "./renderer.ts";
+
+export const MOVE: [number, number][] = [[-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
+export const STEP_MS = 260;   // 每走一格的时长；服务端最短 200ms，留出余量
+const VIEW = 15;              // 请求地图的半径
+const CG_INVISIBLE = 99;      // 小于等于该值的物件编号不绘制（含 60..79 的事件标记）
+
+// 循环播放的动作（character.cpp：挥手、高兴、生气、悲伤、走动、站立、点头）
+const LOOP_ACTS = new Set([6, 7, 8, 9, 4, 3, 11]);
+
+/** 一个会走动的角色（主角、其他玩家、NPC）。 */
+export class Actor {
+  id: number; name: string; sprite: number; kind: string; level: number;
+  x: number; y: number; dir: number;
+  private fromX: number; private fromY: number; private stepAt = -1e9;
+  private frame = 0; private frameAt = 0; private action: unknown = null;
+  speech = ""; speechUntil = 0;
+  // 头上的记号（CA 21 队长、20 战斗、求救）：battle 是战斗编号 + 1（0 没在战斗）
+  leader = false; battle = 0; help = false;
+  // 动作（ANIM_* 编号，-1 没有）：挥手、高兴等循环播放，其余播一次停在最后一格；走路就取消。emote 是自己画面上的打呼 / 冷场
+  act = -1; emote = 0;
+  family = ""; // 家族名（C 字串第 15 段 fmname），画在名字上面
+
+  constructor(o: ObjInfo) {
+    this.id = o.id; this.name = o.name; this.sprite = o.sprite; this.kind = o.kind; this.level = o.level;
+    this.x = this.fromX = o.x; this.y = this.fromY = o.y; this.dir = o.dir;
+    this.leader = !!o.leader; this.battle = o.battle ?? 0; this.help = !!o.help; this.act = o.action ?? -1; this.family = o.family ?? "";
+  }
+
+  moving(now: number) { return now - this.stepAt < STEP_MS; }
+
+  /**
+   * 走一格。chain：紧接着上一步连续走时，新的一步从上一步结束的时刻算起（不是从这一帧），
+   * 否则每格都会多停不到一帧，帧率低时走路一顿一顿的。
+   */
+  stepTo(x: number, y: number, dir: number, now: number, chain = false) {
+    const end = this.stepAt + STEP_MS;
+    const start = chain && now >= end && now - end < STEP_MS / 2 ? end : now;
+    const [px, py] = this.pos(start);
+    this.fromX = px; this.fromY = py;
+    this.x = x; this.y = y; this.dir = dir; this.stepAt = start;
+    this.act = -1; this.emote = 0;
+  }
+
+  /** 做一个动作（changeCharAct）：重播 */
+  setAct(act: number) { this.act = act; this.action = null; }
+
+  warpTo(x: number, y: number, dir: number) {
+    this.x = this.fromX = x; this.y = this.fromY = y; this.dir = dir; this.stepAt = -1e9;
+  }
+
+  /** 绘制用的插值位置 */
+  pos(now: number): [number, number] {
+    const t = Math.min(1, (now - this.stepAt) / STEP_MS);
+    return [this.fromX + (this.x - this.fromX) * t, this.fromY + (this.y - this.fromY) * t];
+  }
+
+  /** 当前动画帧：[图号, 偏移x, 偏移y]；动画数据未到时返回 null */
+  frameOf(assets: Assets, now: number, walking: boolean): [number, number, number] | null {
+    // 原客户端 pattern.cpp：编号小于 SPRSTART(100000) 的不是动画，而是按地图图号显示的静态图
+    if (this.sprite < 100000) {
+      const idx = assets.tile(this.sprite);
+      return idx === undefined ? null : [idx, 0, 0];
+    }
+    const def = assets.anim(this.sprite);
+    if (!def) return null;
+    const want = walking ? ANIM.WALK : this.act >= 0 ? this.act : ANIM.STAND;
+    const act = findAction(def, this.dir, want);
+    if (!act || act.frames.length === 0) return null;
+    if (act !== this.action) { this.action = act; this.frame = 0; this.frameAt = now; }
+    const ms = Math.max(1, act.ticks) * (1000 / 60);
+    const loop = walking || this.act < 0 || LOOP_ACTS.has(this.act); // ANM_LOOP / ANM_NO_LOOP
+    if (now - this.frameAt > ms * 30) this.frameAt = now; // 长时间没画（切后台）时不追帧
+    while (now - this.frameAt >= ms) {
+      if (!loop && this.frame >= act.frames.length - 1) { this.frameAt = now; break; } // 停在最后一格
+      this.frame = (this.frame + 1) % act.frames.length; this.frameAt += ms;
+    }
+    const [img, fx, fy] = act.frames[this.frame];
+    return img < 0 ? null : [img, fx, fy];
+  }
+}
+
+/**
+ * 方向：原版 getDirData / Atan(x, y) + 22.5 的语义。Atan 是 atan2 的角度再减 135°，
+ * 所以 (dx, dy) 的方向 = ⌊((atan2(dy, dx) − 135° + 22.5°) mod 360°) / 45°⌋。
+ */
+export function dirTo(dx: number, dy: number): number {
+  if (dx === 0 && dy === 0) return 0;
+  const deg = (Math.atan2(dy, dx) * 180) / Math.PI - 135 + 22.5;
+  return Math.floor((((deg % 360) + 360) % 360) / 45) & 7;
+}
+
+/**
+ * 原客户端的点击移动路线（map.cpp getRouteMap）：
+ *   1. 每一步都重新瞄准目标，只允许在「起点看目标的方向」及其左右 45° 内前进，所以路线接近直线；
+ *   2. 斜走被挡时，若只挡了一侧的直角邻格，就先走另一侧的邻格绕过去；两侧都挡则停下；
+ *   3. 第 1 段停下后，再沿 x、y 轴各走一段把剩余距离补齐；
+ *   4. 最终没到达时返回朝向目标的 lastDir（moveLastDir）。最长 100 步（MOVE_MAX）。
+ * hit(x, y) 为 true 表示不可进入（checkHitMap）。
+ */
+export function routeTo(sx: number, sy: number, mx: number, my: number, hit: (x: number, y: number) => boolean): { route: number[]; lastDir: number } {
+  const route: number[] = [];
+  let nx = sx, ny = sy;
+  if (nx === mx && ny === my) return { route, lastDir: -1 };
+  const target = dirTo(mx - nx, my - ny);
+  const near = (d: number) => d === target || d === ((target + 1) & 7) || d === ((target - 1) & 7);
+  while (nx !== mx || ny !== my) {
+    if (route.length >= 100) return { route: [], lastDir: -1 };
+    const nowDir = dirTo(mx - nx, my - ny);
+    if (!near(nowDir)) break;
+    let stop = true, dir = -1, dx = 0, dy = 0;
+    for (const off of [0, 1, -1]) {
+      const d = (nowDir + off) & 7;
+      if (!near(d)) continue;
+      [dx, dy] = MOVE[d];
+      if (hit(nx + dx, ny + dy)) {
+        // 下一格正好是目标但不可进入：斜向就试别的方向，直向则停下（不踏上目标）
+        if (nx + dx === mx && ny + dy === my && d % 2 === 1) break;
+        continue;
+      }
+      if (d % 2 === 0) {
+        // 斜走（偶数方向）：检查两侧的直角邻格
+        const d2 = (d + 1) & 7, d3 = (d - 1) & 7;
+        const h2 = hit(nx + MOVE[d2][0], ny + MOVE[d2][1]), h3 = hit(nx + MOVE[d3][0], ny + MOVE[d3][1]);
+        if (h2 && h3) break;
+        if (h2 || h3) {
+          // 只挡一侧：先拐进没挡的邻格，再走一步到原来的斜格（L 形两步）
+          const side = h2 ? d3 : d2;
+          route.push(side);
+          const tx = nx + dx, ty = ny + dy;
+          nx += MOVE[side][0]; ny += MOVE[side][1];
+          dx = tx - nx; dy = ty - ny;
+          dir = dirTo(dx, dy); stop = false;
+          break;
+        }
+      }
+      dir = d; stop = false;
+      break;
+    }
+    if (stop) break;
+    nx += dx; ny += dy;
+    route.push(dir);
+  }
+  // 沿 x 轴、再沿 y 轴补齐
+  const ax = Math.sign(mx - nx);
+  if (ax !== 0) while (!hit(nx + ax, ny) && mx !== nx) { nx += ax; route.push(dirTo(ax, 0)); }
+  const ay = Math.sign(my - ny);
+  if (ay !== 0) while (!hit(nx, ny + ay) && my !== ny) { ny += ay; route.push(dirTo(0, ay)); }
+  const lastDir = route.length > 0 && (nx !== mx || ny !== my) ? dirTo(mx - nx, my - ny) : -1;
+  return { route, lastDir };
+}
+
+interface Sprite { depth: number; q: Quad; gx: number; gy: number; tx: number; ty: number; }
+
+const overlap = (a: Quad, b: Quad) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+/** 头顶文字（名字、聊天气泡），交给 2D 覆盖层绘制 */
+export interface Label { x: number; y: number; text: string; color: string; bubble?: boolean; }
+
+export class Field {
+  floor = -1; floorName = ""; palette = 0; width = 0; height = 0;
+  private tiles = new Uint16Array(0);
+  private objs = new Uint16Array(0);
+  private walk = new Uint8Array(0);   // 0 未知、1 不可走、2 可走、3 传送点
+  // 走过看过的格子（原版 map\<楼层>.dat 的 MAP_SEE_FLAG）：自动地图只画这些格子。按楼层存在 localStorage，重新整理也留着
+  seen = new Uint8Array(0);
+  private seenDirty = false;
+  // 这次上线去过的楼层的地图资料，回到同一层时不必重新请求
+  private cache = new Map<number, { tiles: Uint16Array; objs: Uint16Array; walk: Uint8Array; seen: Uint8Array }>();
+  private pending = new Set<string>();
+
+  self: Actor | null = null;
+  actors = new Map<number, Actor>();
+  wantDir = -1;
+  target: [number, number] | null = null;
+  hideOthers = false; // 系统菜单「人物屏蔽」：不画其他玩家
+  corrections = 0;
+  private waitingWarp = false;
+  private assets: Assets;
+  private net: Connection;
+
+  constructor(assets: Assets, net: Connection) {
+    this.assets = assets;
+    this.net = net;
+    net.on("Self", (m) => { this.self = new Actor({ id: m.id, kind: "player", name: m.name, sprite: m.sprite, x: 0, y: 0, dir: 0 }); });
+    net.on("EnterFloor", (m) => this.enterFloor(m));
+    net.on("MapData", (m) => this.mapData(m));
+    net.on("PosCorrect", (m) => { this.corrections++; this.self?.warpTo(m.x, m.y, m.dir); this.target = null; this.waitingWarp = false; });
+    net.on("ObjAppear", (m) => { for (const o of m.objs) { this.actors.set(o.id, new Actor(o)); album.seen(o.sprite); } }); // 相簿的"看到"（CheckNewPet）
+    net.on("ObjDisappear", (m) => { for (const id of m.ids) this.actors.delete(id); });
+    net.on("ObjMove", (m) => {
+      if (m.id === this.self?.id) this.followSteps.push([m.x, m.y, m.dir]); // 队员跟着队长走（服务端替我们走）
+      else this.actors.get(m.id)?.stepTo(m.x, m.y, m.dir, performance.now());
+    });
+    net.on("ObjAction", (m) => { (this.self?.id === m.id ? this.self : this.actors.get(m.id))?.setAct(m.action); });
+    net.on("ObjFamily", (m) => { const a = this.actors.get(m.id); if (a) a.family = m.family; });
+    net.on("ObjMark", (m) => {
+      const a = this.self?.id === m.id ? this.self : this.actors.get(m.id);
+      if (a) { a.leader = m.leader; a.battle = m.battle; a.help = m.help; }
+    });
+    // 换武器后形象改变（CHAR_getNewImagenumberFromEquip），自己和别人都一样处理
+    net.on("ObjSprite", (m) => {
+      const a = this.self?.id === m.id ? this.self : this.actors.get(m.id);
+      if (a) a.sprite = m.sprite;
+    });
+    net.on("ObjTurn", (m) => { const a = this.actors.get(m.id); if (a) a.dir = m.dir; });
+    net.on("ChatMsg", (m) => {
+      const a = m.fromId === this.self?.id ? this.self : this.actors.get(m.fromId);
+      if (a && m.channel === "near") { a.speech = m.text; a.speechUntil = performance.now() + 5000; }
+    });
+  }
+
+  private enterFloor(m: S2CEnterFloor) {
+    this.followSteps = [];
+    this.saveSeen();
+    if (this.floor >= 0) this.cache.set(this.floor, { tiles: this.tiles, objs: this.objs, walk: this.walk, seen: this.seen });
+    this.floor = m.floor; this.floorName = m.name; this.palette = m.palette;
+    this.width = m.width; this.height = m.height;
+    const n = m.width * m.height, c = this.cache.get(m.floor);
+    if (c && c.tiles.length === n) {
+      ({ tiles: this.tiles, objs: this.objs, walk: this.walk, seen: this.seen } = c);
+    } else {
+      this.tiles = new Uint16Array(n);
+      this.objs = new Uint16Array(n);
+      this.walk = new Uint8Array(n);
+      this.seen = this.loadSeen(n);
+    }
+    this.pending.clear();
+    this.actors.clear();
+    this.target = null;
+    this.waitingWarp = false;
+    this.self?.warpTo(m.x, m.y, m.dir);
+    this.requestView();
+  }
+
+  private mapData(m: S2CMapData) {
+    this.pending.delete(`${m.x1},${m.y1},${m.x2},${m.y2}`);
+    if (m.floor !== this.floor) return;
+    const w = m.x2 - m.x1;
+    for (let i = 0; i < m.tiles.length; i++) {
+      const x = m.x1 + (i % w), y = m.y1 + Math.floor(i / w);
+      if (x < 0 || y < 0 || x >= this.width || y >= this.height) continue;
+      const k = y * this.width + x;
+      this.tiles[k] = m.tiles[i];
+      this.objs[k] = m.objs[i];
+      this.walk[k] = m.walk.charCodeAt(i) - 48 + 1; // '0'→1 不可走，'1'→2 可走，'2'→3 传送点
+      if (!this.seen[k]) { this.seen[k] = 1; this.seenDirty = true; }
+    }
+    this.mapVersion++;
+  }
+
+  /** 地图资料每到一批加一，自动地图据此重画 */
+  mapVersion = 0;
+
+  tileAt(x: number, y: number) { return this.tiles[y * this.width + x]; }
+  objAt(x: number, y: number) { return this.objs[y * this.width + x]; }
+  loadedAt(x: number, y: number) { return this.walk[y * this.width + x] !== 0; }
+
+  /** 自动地图要画的范围里，看过但这次还没收到资料的格子（重新整理之后）：一次补请求 */
+  requestSeen(x1: number, y1: number, x2: number, y2: number) {
+    x1 = Math.max(0, x1); y1 = Math.max(0, y1); x2 = Math.min(this.width, x2); y2 = Math.min(this.height, y2);
+    let bx1 = Infinity, by1 = Infinity, bx2 = -1, by2 = -1;
+    for (let y = y1; y < y2; y++) for (let x = x1; x < x2; x++) {
+      const k = y * this.width + x;
+      if (this.seen[k] && !this.walk[k]) { bx1 = Math.min(bx1, x); by1 = Math.min(by1, y); bx2 = Math.max(bx2, x + 1); by2 = Math.max(by2, y + 1); }
+    }
+    if (bx2 < 0) return;
+    const key = `${bx1},${by1},${bx2},${by2}`;
+    if (this.pending.has(key)) return;
+    this.pending.add(key);
+    this.net.send({ t: "MapReq", floor: this.floor, x1: bx1, y1: by1, x2: bx2, y2: by2 });
+  }
+
+  private seenKey() { return `sa.seen.${this.self?.id ?? 0}.${this.floor}`; }
+
+  /** localStorage 里存成位元组再转 base64；读不到（私密浏览、被清掉）就从空的开始 */
+  private loadSeen(n: number): Uint8Array {
+    const out = new Uint8Array(n);
+    try {
+      const b = atob(localStorage.getItem(this.seenKey()) ?? "");
+      for (let i = 0; i < n; i++) if (b.charCodeAt(i >> 3) & (1 << (i & 7))) out[i] = 1;
+    } catch {}
+    return out;
+  }
+
+  /** 走动时由画面定期呼叫（不必每格都写） */
+  saveSeen() {
+    if (!this.seenDirty || this.floor < 0) return;
+    this.seenDirty = false;
+    const bytes = new Uint8Array((this.seen.length + 7) >> 3);
+    for (let i = 0; i < this.seen.length; i++) if (this.seen[i]) bytes[i >> 3] |= 1 << (i & 7);
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    try { localStorage.setItem(this.seenKey(), btoa(s)); } catch {}
+  }
+
+  /** 视野内未收到的格子：按行求未知区间，连续且区间相同的行合并成一块请求。 */
+  private requestView() {
+    const s = this.self;
+    if (!s || this.floor < 0) return;
+    let run: number[] | null = null; // [x1, x2, 起始行]
+    const flush = (yEnd: number) => {
+      if (!run) return;
+      const key = `${run[0]},${run[2]},${run[1]},${yEnd}`;
+      if (!this.pending.has(key)) {
+        this.pending.add(key);
+        this.net.send({ t: "MapReq", floor: this.floor, x1: run[0], y1: run[2], x2: run[1], y2: yEnd });
+      }
+      run = null;
+    };
+    const yMax = Math.min(this.height - 1, s.y + VIEW);
+    for (let y = Math.max(0, s.y - VIEW); y <= yMax; y++) {
+      let x1 = Infinity, x2 = -Infinity;
+      for (let x = Math.max(0, s.x - VIEW); x <= Math.min(this.width - 1, s.x + VIEW); x++)
+        if (!this.walk[y * this.width + x]) { x1 = Math.min(x1, x); x2 = x + 1; }
+      if (x1 === Infinity) { flush(y); continue; }
+      if (run && (run[0] !== x1 || run[1] !== x2)) flush(y);
+      if (!run) run = [x1, x2, y];
+    }
+    flush(yMax + 1);
+  }
+
+  /** 由服务端算好的通行标记（MapData.walk），与服务端判定完全一致 */
+  canEnter(x: number, y: number): boolean {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return false;
+    return this.walk[y * this.width + x] >= 2;
+  }
+
+  update(now: number) {
+    const s = this.self;
+    if (!s || this.floor < 0 || this.waitingWarp || s.moving(now)) { this.requestView(); return; }
+    if (this.follower) {
+      // 队员（partyMoveProc）：自己不能走，只按服务端的步子走；方向键只转身
+      const step = this.followSteps.shift();
+      if (step) s.stepTo(step[0], step[1], step[2], now, true);
+      else if (this.wantDir >= 0 && s.dir !== this.wantDir) { s.dir = this.wantDir; this.net.send({ t: "Turn", dir: s.dir }); }
+      this.target = null;
+      this.requestView();
+      return;
+    }
+    let d = this.wantDir;
+    if (d >= 0) this.path = [];
+    if (d < 0 && this.target) {
+      if (this.pathGoal !== `${this.target}`) {
+        const [tx, ty] = this.target;
+        const r = routeTo(s.x, s.y, tx, ty, (x, y) => !this.canEnter(x, y));
+        // 优先用原版路线（接近直线）；原版到不了目标时（遇障碍停下），若 BFS 能绕到就改走 BFS（H5 新增），
+        // 都到不了则按原版走到停下处再转向目标
+        const reaches = (route: number[]) => {
+          const [ex, ey] = route.reduce(([x, y], d) => [x + MOVE[d][0], y + MOVE[d][1]], [s.x, s.y]);
+          return ex === tx && ey === ty;
+        };
+        const bfs = reaches(r.route) ? [] : this.findPath(s.x, s.y, tx, ty);
+        const useBfs = bfs.length > 0 && (reaches(bfs) || r.route.length === 0);
+        this.path = useBfs ? bfs : r.route;
+        this.finalDir = useBfs ? -1 : r.lastDir;
+        this.pathGoal = `${this.target}`;
+      }
+      d = this.path.shift() ?? -1;
+      if (d < 0) {
+        // 走完了但没到达目标：原版会转向目标方向（moveLastDir）
+        if (this.finalDir >= 0 && s.dir !== this.finalDir) { s.dir = this.finalDir; this.net.send({ t: "Turn", dir: s.dir }); }
+        this.target = null;
+        this.pathGoal = "";
+      }
+    }
+    if (d >= 0) {
+      const nx = s.x + MOVE[d][0], ny = s.y + MOVE[d][1];
+      if (!this.canEnter(nx, ny)) {
+        if (s.dir !== d) { s.dir = d; this.net.send({ t: "Turn", dir: d }); }
+        this.target = null;
+      } else {
+        // 先走后等确认：服务端走不通会回 PosCorrect；踩到传送点则等 EnterFloor
+        this.net.send({ t: "Move", x: s.x, y: s.y, dir: d });
+        s.stepTo(nx, ny, d, now, true);
+        if (this.walk[ny * this.width + nx] === 3) { this.waitingWarp = true; this.wantDir = -1; this.target = null; }
+      }
+    }
+    this.requestView();
+  }
+
+  follower = false;                              // 在队伍里而且不是队长（partyModeFlag 且不是 LEADER）
+  private followSteps: [number, number, number][] = [];
+  private path: number[] = [];
+  private pathGoal = "";
+  private finalDir = -1;
+  private actorRects: [Actor, number, number, number, number][] = []; // 上一帧各角色在屏幕上的矩形
+
+  /** 屏幕点上最靠前（最后画）的角色 */
+  actorAt(x: number, y: number): Actor | null {
+    for (let i = this.actorRects.length - 1; i >= 0; i--) {
+      const [a, x1, y1, x2, y2] = this.actorRects[i];
+      if (x >= x1 && x < x2 && y >= y1 && y < y2) return a;
+    }
+    return null;
+  }
+
+  /**
+   * 8 方向 BFS，只走已收到且可通行的格子，返回方向序列。目标不可达时走到离目标最近的可达格。
+   * 传送点只能作为终点，避免路过时被传走。
+   */
+  findPath(sx: number, sy: number, tx: number, ty: number, limit = 40): number[] {
+    const W = this.width, key = (x: number, y: number) => y * W + x;
+    const prev = new Map<number, [number, number]>(); // 格 → [上一格, 方向]
+    const start = key(sx, sy);
+    prev.set(start, [-1, -1]);
+    let queue = [start], best = start;
+    const dist = (k: number) => Math.max(Math.abs((k % W) - tx), Math.abs(Math.floor(k / W) - ty));
+    for (let depth = 0; queue.length && depth < limit; depth++) {
+      const next: number[] = [];
+      for (const k of queue) {
+        if (dist(k) < dist(best)) best = k;
+        if (dist(k) === 0) { queue = []; break; }
+        const x = k % W, y = Math.floor(k / W);
+        if (k !== start && this.walk[k] === 3) continue; // 不穿过传送点
+        for (let d = 0; d < 8; d++) {
+          const nx = x + MOVE[d][0], ny = y + MOVE[d][1], nk = key(nx, ny);
+          if (prev.has(nk) || !this.canEnter(nx, ny)) continue;
+          prev.set(nk, [k, d]);
+          next.push(nk);
+        }
+      }
+      queue = next;
+    }
+    const out: number[] = [];
+    for (let k = best; k !== start; k = prev.get(k)![0]) out.unshift(prev.get(k)![1]);
+    return out;
+  }
+
+  /** 屏幕点 → 格子（相对主角的绘制位置） */
+  /** 格子 → 屏幕（相对主角的绘制位置），与 build() 用同一投影 */
+  gridToScreen(gx: number, gy: number, now: number, cx: number, cy: number): [number, number] {
+    const [px, py] = this.self!.pos(now);
+    return [cx + (gx - px + (gy - py)) * 32, cy + (gy - py - (gx - px)) * 24];
+  }
+
+  screenToGrid(sx: number, sy: number, cx: number, cy: number): [number, number] {
+    const [px, py] = this.self!.pos(performance.now());
+    const a = (sx - cx) / 32, b = (sy - cy) / 24;
+    return [Math.round(px + (a - b) / 2), Math.round(py + (a + b) / 2)];
+  }
+
+  // ---------------- 渲染 ----------------
+
+  build(now: number, W: number, H: number, labels: Label[]): Quad[] {
+    this.actorRects = [];
+    const out: Quad[] = [];
+    const s = this.self;
+    if (!s || this.floor < 0) return out;
+    const [px, py] = s.pos(now);
+    const cx = W / 2, cy = H / 2 + 24;
+    const sx = (x: number, y: number) => cx + (x - px + (y - py)) * 32;
+    const sy = (x: number, y: number) => cy + (y - py - (x - px)) * 24;
+    const R = VIEW + 2;
+    const x0 = Math.max(0, Math.floor(px) - R), x1 = Math.min(this.width - 1, Math.ceil(px) + R);
+    const y0 = Math.max(0, Math.floor(py) - R), y1 = Math.min(this.height - 1, Math.ceil(py) + R);
+
+    // 地面：互不遮挡，按图集页分组减少绘制次数
+    const groups = new Map<object, Quad[]>();
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const k = y * this.width + x;
+      if (!this.walk[k] || !this.tiles[k]) continue;
+      const q = this.mapQuad(this.tiles[k], sx(x, y), sy(x, y));
+      if (q) { const g = groups.get(q.tex); if (g) g.push(q); else groups.set(q.tex, [q]); }
+    }
+    for (const g of groups.values()) out.push(...g);
+
+    // 物件：按锚点（占地范围最靠前的一角）的屏幕 y 由远到近
+    const objects: Sprite[] = [];
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const k = y * this.width + x;
+      if (!this.walk[k] || this.objs[k] <= CG_INVISIBLE) continue;
+      const q = this.mapQuad(this.objs[k], sx(x, y), sy(x, y));
+      if (q) {
+        const [tx, ty] = this.assets.footprint(this.objs[k]);
+        objects.push({ depth: sy(x, y), q, gx: x, gy: y, tx, ty });
+      }
+    }
+    objects.sort((a, b) => a.depth - b.depth);
+
+    // 角色：先按深度定位，再和屏幕上重叠的物件比较占地关系（原客户端 sort_parts 的思路）：
+    // 角色在物件占地范围的前方（x 更小或 y 更大）时必须画在它之后，否则站在大建筑侧面会被整栋压住
+    const chars: Sprite[] = [];
+    for (const a of [s, ...this.actors.values()]) {
+      if (this.hideOthers && a !== s && a.kind === "player") continue;
+      const [ax, ay] = a.pos(now);
+      const ex = sx(ax, ay), ey = sy(ax, ay);
+      if (ex < -100 || ey < -100 || ex > W + 100 || ey > H + 200) continue;
+      const walking = a.moving(now) || (a === s && (this.wantDir >= 0 || this.target !== null));
+      const f = a.frameOf(this.assets, now, walking);
+      const q = f && this.imageQuad(f[0], ex + f[1], ey + f[2]);
+      if (q) {
+        const flat = a.kind === "item" || a.kind === "gold"; // 地上的道具与石币贴着地面，同一格的人画在它上面
+        chars.push({ depth: ey + (flat ? 0 : 0.5), q, gx: Math.round(ax), gy: Math.round(ay), tx: 1, ty: 1 });
+        if (a !== s) this.actorRects.push([a, q.x, q.y, q.x + q.w, q.y + q.h]);
+      }
+      const top = q ? q.y - 4 : ey - 70;
+      if (a.kind === "item" || a.kind === "gold") continue; // 地上的道具与石币不标名字，滑鼠停着时显示在下方
+      labels.push({ x: ex, y: top, text: a.name, color: a === s ? "#ffe680" : a.kind === "npc" ? "#9fd3ff" : "#ffffff" });
+      // 家族名（character.cpp：别人的家族名在名字上方 13 像素，自己的不画）
+      const fam = a !== s && a.family ? 16 : 0;
+      if (fam) labels.push({ x: ex, y: top - fam, text: a.family, color: "#ffffff" });
+      if (a.speech && now < a.speechUntil) labels.push({ x: ex, y: top - 18 - fam, text: a.speech, color: "#ffffff", bubble: true });
+      // 头上的记号（character.cpp）：队长 SPR_leader（战斗中不画）、战斗 CG_VS_MARK_nA、求救 CG_SPEECH_HELP（低 20）
+      const mark = (q2: Quad | null) => { if (q2) chars.push({ depth: ey + 0.6, q: q2, gx: Math.round(ax), gy: Math.round(ay), tx: 1, ty: 1 }); };
+      const my = top - 20 - fam;
+      if (a.battle > 0) mark(this.mapQuad(25610 + 2 * ((a.battle - 1) % 10), ex, my));
+      else if (a.leader) {
+        const def = this.assets.anim(100500), act = def?.actions[0];
+        if (act && act.frames.length) {
+          const [img, fx, fy] = act.frames[Math.floor(now / (Math.max(1, act.ticks) * (1000 / 60))) % act.frames.length];
+          if (img >= 0) mark(this.imageQuad(img, ex + fx, my + fy));
+        }
+      }
+      if (a.help) mark(this.mapQuad(25525, ex, my + 20));
+      if (a.emote) { // 打呼 SPR_sleep / 冷场 SPR_stone（setPcEmotion）
+        const def = this.assets.anim(a.emote), act = def?.actions[0];
+        if (act && act.frames.length) {
+          const [img, fx, fy] = act.frames[Math.floor(now / (Math.max(1, act.ticks) * (1000 / 60))) % act.frames.length];
+          if (img >= 0) mark(this.imageQuad(img, ex + fx, my + fy));
+        }
+      }
+    }
+    chars.sort((a, b) => a.depth - b.depth);
+
+    const after = new Map<number, Sprite[]>(); // 物件下标 → 紧随其后绘制的角色；-1 表示在所有物件之前
+    for (const c of chars) {
+      let slot = -1;
+      objects.forEach((o, i) => {
+        if (o.depth <= c.depth) slot = Math.max(slot, i);
+        else if (overlap(o.q, c.q) && (c.gx < o.gx || c.gy > o.gy)) slot = Math.max(slot, i);
+      });
+      const list = after.get(slot);
+      if (list) list.push(c); else after.set(slot, [c]);
+    }
+    for (const c of after.get(-1) ?? []) out.push(c.q);
+    objects.forEach((o, i) => {
+      out.push(o.q);
+      for (const c of after.get(i) ?? []) out.push(c.q);
+    });
+    return out;
+  }
+
+  private mapQuad(mapNumber: number, x: number, y: number): Quad | null {
+    const idx = this.assets.tile(mapNumber);
+    return idx === undefined ? null : this.imageQuad(idx, x, y);
+  }
+
+  private imageQuad(id: number, x: number, y: number): Quad | null {
+    const e = this.assets.image(id);
+    if (!e || e.page < 0) return null;
+    const tex = this.assets.page(e.set, e.page);
+    return tex && { tex, x: Math.round(x + e.ox), y: Math.round(y + e.oy), u: e.x, v: e.y, w: e.w, h: e.h };
+  }
+}

@@ -1,0 +1,15 @@
+# saserver 的设定。相对路径以本文件所在的目录为准。
+# 同目录的 config.local.yaml 里写的项目会盖掉这里的。
+
+addr: 127.0.0.1:8800      # 监听地址；要让别的机器连进来就改成 0.0.0.0:8800
+data: gamedata            # 原版服务端数据（map/、npc/、item/、battle/……）
+db: bin/saserver.db       # SQLite 数据库（账号、角色、家族……），第一次启动时建立
+assets: assets            # 从原客户端导出的资源（tools/asset-export）
+client: client            # 客户端页面（index.html 与 node client/build.mjs 产生的 dist/）
+origins: []               # 额外允许连 WebSocket 的页面来源，例如 [https://example.com]；默认只允许同源
+gm: false                 # 允许聊天里的调试指令（/warp、/item、/gold……），只用于开发
+
+# 大区与线路：每条线路是一个独立的世界，账号与角色共用，家族所有线路共用
+groups:
+  - name: 石器时代
+    lines: [一线, 二线, 三线]

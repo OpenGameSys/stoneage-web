@@ -1,0 +1,25 @@
+# 编译与构建产物
+bin/saserver.exe
+bin/*.exe~
+client/dist/
+
+# 运行时生成的数据库
+bin/*.db
+bin/*.db-shm
+bin/*.db-wal
+docs/*
+
+# 本机的设定
+config.local.yaml
+
+# 资源导出工具的编译产物
+tools/*
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+CLAUDE.md
