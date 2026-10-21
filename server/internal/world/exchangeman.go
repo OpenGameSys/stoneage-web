@@ -66,6 +66,7 @@ type exState struct{ key, page int }
 // exchangeTalk 是 NPC_ExChangeManTalked；talk 是对着 NPC 说的话（点选时为空，KeyWord 段要说对才成立）。
 // 要和 NPC 面对面（2 格内）或站在旁边面向它。
 func (w *World) exchangeTalk(p, n *entity, talk string) {
+	defer w.flushQuests(p)
 	if !faceToFace(n, p, 2) && !inFront(p, n, 1) {
 		return
 	}
@@ -158,6 +159,7 @@ func (w *World) exMessage(p, n *entity, b string, evNo int, st exState) {
 
 // exchangeReply 是 NPC_ExChangeManWindowTalked：离 NPC 超过 2 格不处理；按窗口编号与按钮决定下一个 NPC_MsgDisp。
 func (w *World) exchangeReply(p, n *entity, win *npcWindow, button int, _ string) {
+	defer w.flushQuests(p)
 	if max(abs(n.x-p.x), abs(n.y-p.y)) > 2 {
 		return
 	}

@@ -10,7 +10,8 @@
   body { margin: 0; background: #000; color: #e8e8ea; font: 14px system-ui, sans-serif; overflow: hidden;
     display: flex; align-items: center; justify-content: center; }
   .stage { position: relative; width: min(100vw, calc(100vh * 4 / 3)); width: min(100vw, calc(100dvh * 4 / 3)); }
-  .stage canvas { display: block; width: 100%; aspect-ratio: 4 / 3; image-rendering: pixelated; }
+  /* 两张画布的像素数由脚本跟着显示大小设定（ui.ts fitView / fitOverlay），一般不会再被浏览器缩放 */
+  .stage canvas { display: block; width: 100%; aspect-ratio: 4 / 3; }
   #overlay { position: absolute; inset: 0; pointer-events: none; }
   #hud { position: fixed; left: 4px; bottom: 2px; color: #9a9ca5; font-size: 12px; pointer-events: none; }
 </style>
@@ -21,6 +22,6 @@
   <canvas id="overlay" width="800" height="600"></canvas>
 </div>
 <div id="hud"></div>
-<script type="module" src="dist/main.js?v=mviafj27"></script>
+<script type="module" src="dist/main.js?v=mviekdyz"></script>
 </body>
 </html>

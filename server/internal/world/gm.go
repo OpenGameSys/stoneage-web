@@ -519,6 +519,7 @@ func (w *World) gmCommand(e *entity, text string) bool {
 			return usage()
 		}
 		w.saveProgress(e)
+		w.flushQuests(e)
 		reply("任务旗标 %d 设为 %s。做完：%s　进行中：%s", n, mode, c.EndEvents, c.NowEvents)
 	case "/fm":
 		n := num(2, math.MinInt32, math.MaxInt32)

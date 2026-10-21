@@ -32,6 +32,7 @@ type Game struct {
 	Atoms    map[string]bool         // 素材的名字（itematom.txt，ITEM_initItemAtom；不在表里的成分合成时略过）
 	Elders   map[int]Hometown        // 长老编号 → 记录点位置（elders[] 与记录点 NPC 的 Born）
 	Quiz     []Question              // 猜谜题库（question.txt）
+	Quests   []JobDaily              // 任务日志的行（jobdaily.txt，CHAR_JobDaily）
 	Ride     *Ride                   // 骑宠形象对照（ride/familyridefunction.lua）
 	Warnings []string
 }
@@ -65,6 +66,7 @@ func Load(dataDir string) (*Game, error) {
 	}
 	g.Elders = loadElders(npcs)
 	g.Quiz = loadQuizFile(dataDir)
+	g.Quests = loadJobDailyFile(dataDir)
 	g.Ride = LoadRide(dataDir)
 	for _, w := range append(warps, NPCWarps(npcs)...) {
 		if g.Floors[w.Floor] == nil || g.Floors[w.ToFloor] == nil {

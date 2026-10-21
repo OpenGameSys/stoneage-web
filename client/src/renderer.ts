@@ -1,5 +1,8 @@
 // WebGL2 精灵渲染：8 位页（R8UI 下标 + 调色板纹理查色）与 RGBA 页，连续使用同一纹理的图合成一次绘制。
 // 加载约束见 h5/CLAUDE.md"资源格式规格" 10.5：必须关闭色彩空间转换与预乘。
+// 清晰度：场景永远按逻辑分辨率 800×600 画进离屏纹理（像素画一个像素对一个纹素），再按画布的实际像素数（CSS 大小 × devicePixelRatio，
+// main.ts 的 fitView）用"锐利的双线性"放大到画布：像素内部不插值、只在相邻像素的交界处用一个屏幕像素过渡，
+// 非整数倍放大时既不糊也没有宽窄不一的像素；缩小时退化成双线性（近似面积平均），比浏览器把 800×600 的画布拉伸要清楚。
 
 export interface Texture { tex: WebGLTexture; indexed: boolean; w: number; h: number; }
 export interface Quad { tex: Texture; x: number; y: number; u: number; v: number; w: number; h: number; }
@@ -19,6 +22,21 @@ const FS_RGBA = `#version 300 es
 precision highp float; in vec2 vUv; out vec4 o; uniform sampler2D uPage;
 void main(){ vec4 c = texelFetch(uPage, ivec2(vUv), 0); if (c.a == 0.) discard; o = c; }`;
 
+const SCENE_W = 800, SCENE_H = 600; // 逻辑分辨率（界面座标）
+const VS_BLIT = `#version 300 es
+in vec2 aPos; out vec2 vUv;
+void main(){ vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0., 1.); }`;
+// 场景纹理在 FBO 里 v=0 是逻辑座标的下缘（场景着色器把 y 翻过来画），所以 vUv 不必再翻
+const FS_BLIT = `#version 300 es
+precision highp float; in vec2 vUv; out vec4 o; uniform sampler2D uTex; uniform vec2 uSize;
+void main(){
+  vec2 p = vUv * uSize;
+  vec2 seam = floor(p + 0.5);
+  vec2 d = max(fwidth(p), vec2(1e-5));
+  p = seam + clamp((p - seam) / min(d, vec2(1.)), -0.5, 0.5); // 缩小（d > 1）时不改座标，交给 mipmap 的三线性过滤
+  o = vec4(texture(uTex, p / uSize).rgb, 1.);
+}`;
+
 const FLOATS_PER_QUAD = 24; // 两个三角形 × 3 顶点 × (x, y, u, v)
 
 interface Prog { p: WebGLProgram; vao: WebGLVertexArrayObject; uView: WebGLUniformLocation | null; uPage: WebGLUniformLocation | null;
@@ -32,6 +50,9 @@ export class Renderer {
   private verts = new Float32Array(4096 * FLOATS_PER_QUAD); // 不够时加倍
   private vboSize = 0;
   private palette: Texture | null = null;
+  private fbo: WebGLFramebuffer;      // 800×600 的离屏场景
+  private scene: WebGLTexture;
+  private blit: { p: WebGLProgram; vao: WebGLVertexArrayObject; uTex: WebGLUniformLocation | null; uSize: WebGLUniformLocation | null };
   paletteA = 0;
   paletteB = 0;
   paletteMix = 0;
@@ -48,6 +69,41 @@ export class Renderer {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    // 离屏场景：RGBA8、双线性（锐利放大的着色器靠它在交界处插值）、边缘夹住；WebGL2 的非 2 次幂纹理也能做 mipmap
+    this.scene = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.scene);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, SCENE_W, SCENE_H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); // 缩小时 present 换成 mipmap 的三线性（不会丢像素）
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.fbo = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.scene, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.blit = this.blitProgram();
+  }
+
+  /** 把离屏场景放大到画布的着色器：一个盖满画布的矩形（两个三角形） */
+  private blitProgram() {
+    const gl = this.gl, p = gl.createProgram()!;
+    for (const [type, src] of [[gl.VERTEX_SHADER, VS_BLIT], [gl.FRAGMENT_SHADER, FS_BLIT]] as [number, string][]) {
+      const s = gl.createShader(type)!;
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? "shader");
+      gl.attachShader(p, s);
+    }
+    gl.linkProgram(p);
+    const vao = gl.createVertexArray()!, vbo = gl.createBuffer()!;
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
+    const aPos = gl.getAttribLocation(p, "aPos");
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 8, 0);
+    gl.bindVertexArray(null);
+    return { p, vao, uTex: gl.getUniformLocation(p, "uTex"), uSize: gl.getUniformLocation(p, "uSize") };
   }
 
   /** 编译着色器，查好 uniform 位置，建一个绑着顶点缓冲的 VAO（之后每次绘制不必再查、再设定顶点格式） */
@@ -102,11 +158,38 @@ export class Renderer {
    * 每批只换纹理、画缓冲里的那一段。
    */
   draw(quads: Quad[], clear: [number, number, number]) {
-    const gl = this.gl, W = gl.canvas.width, H = gl.canvas.height;
+    const gl = this.gl, W = SCENE_W, H = SCENE_H;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.viewport(0, 0, W, H);
     gl.clearColor(clear[0], clear[1], clear[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     this.drawCalls = 0;
+    this.drawScene(quads, W, H);
+    this.present();
+  }
+
+  /** 离屏场景放大到画布（画布大小由 main.ts 的 fitView 跟着显示大小设定） */
+  private present() {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.blit.p);
+    gl.bindVertexArray(this.blit.vao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.scene);
+    const shrink = gl.canvas.width < SCENE_W || gl.canvas.height < SCENE_H;
+    if (shrink) gl.generateMipmap(gl.TEXTURE_2D); // 只有缩小时才做；没有 mipmap 时不能用 mipmap 过滤（纹理不完整会采样成黑色）
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, shrink ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
+    gl.uniform1i(this.blit.uTex, 0);
+    gl.uniform2f(this.blit.uSize, SCENE_W, SCENE_H);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.bindVertexArray(null);
+    gl.enable(gl.BLEND);
+  }
+
+  private drawScene(quads: Quad[], W: number, H: number) {
+    const gl = this.gl;
     if (quads.length === 0) return;
     if (quads.length * FLOATS_PER_QUAD > this.verts.length) {
       let n = this.verts.length;

@@ -97,6 +97,38 @@ func (w *World) PetRide(charID, slot int) {
 	})
 }
 
+// rideInfo 是宠物窗口详情里的骑乘说明（额外新功能）："no" 这种宠物不能骑；"ok" 现在就能骑；
+// 否则 "need:" 加上还差的条件（照 PetRide / FAMILY_RidePet 的检查顺序）。
+func (w *World) rideInfo(e *entity, p *Pet) string {
+	if !w.game.Ride.Rideable(p.Sprite) {
+		return "no"
+	}
+	var need []string
+	if lr := learnRide(e); lr < p.Level {
+		need = append(need, fmt.Sprintf("骑乘课程（现在只能骑 %d 级以下）", lr))
+	}
+	if ai := w.petLoyalty(e, p); ai < 100 {
+		need = append(need, fmt.Sprintf("忠诚度 100（现在 %d）", ai))
+	}
+	if e.char.Level+RideLevel < p.Level {
+		need = append(need, fmt.Sprintf("宠物最多比你高 %d 级（你 %d 级）", RideLevel, e.char.Level))
+	}
+	if p.Trans > 0 {
+		need = append(need, "转生过的宠物不能骑")
+	}
+	if w.game.Ride.Sprite(e.char.Sprite, w.weaponSprite(e), p.Sprite, e.pets.Licence[0]) == 0 {
+		if i := w.game.Ride.LicenceIndex(p.Sprite); i >= 0 && e.pets.Licence[0]&(1<<i) == 0 {
+			need = append(need, "先用这种宠物的骑乘书学会")
+		} else {
+			need = append(need, "你的人物形象骑不了这只（颜色不合）")
+		}
+	}
+	if len(need) == 0 {
+		return "ok"
+	}
+	return "need:" + strings.Join(need, "、")
+}
+
 // dismount：下来（RIDEPET = -1，形象换回拿武器的样子）。
 func (w *World) dismount(e *entity) {
 	e.pets.Ride = -1

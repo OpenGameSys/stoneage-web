@@ -171,6 +171,7 @@ type PetInfo struct {
 	Items     []InvItem  `json:"items"`
 	Guard     bool       `json:"guard"`
 	Ext       PetExt     `json:"ext"`
+	RideInfo  string     `json:"rideInfo"`
 }
 
 type PetExt struct {
@@ -205,6 +206,13 @@ type GmEntry struct {
 	Name  string `json:"name"`
 	Info  string `json:"info"`
 	Image int    `json:"image"`
+}
+
+type QuestEntry struct {
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	State string `json:"state"`
+	Hint  string `json:"hint"`
 }
 
 type AddressEntry struct {
@@ -536,6 +544,11 @@ type GmListReq struct {
 
 func (*GmListReq) MsgType() string { return "GmListReq" }
 
+type QuestReq struct {
+}
+
+func (*QuestReq) MsgType() string { return "QuestReq" }
+
 type GmDetailReq struct {
 	Kind string `json:"kind"`
 	ID   int    `json:"id"`
@@ -566,6 +579,12 @@ type GmList struct {
 }
 
 func (*GmList) MsgType() string { return "GmList" }
+
+type QuestLog struct {
+	Quests []QuestEntry `json:"quests"`
+}
+
+func (*QuestLog) MsgType() string { return "QuestLog" }
 
 type GmDetail struct {
 	Kind  string   `json:"kind"`
@@ -1082,6 +1101,8 @@ func DecodeClient(data []byte) (Message, error) {
 		m = &GmCommand{}
 	case "GmListReq":
 		m = &GmListReq{}
+	case "QuestReq":
+		m = &QuestReq{}
 	case "GmDetailReq":
 		m = &GmDetailReq{}
 	case "Logout":

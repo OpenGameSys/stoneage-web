@@ -17,6 +17,7 @@ import { PetWindow } from "./pets.ts";
 import { AutoMap } from "./automap.ts";
 import { AiWindow } from "./ai.ts";
 import { GmWindow } from "./gm.ts";
+import { QuestWindow } from "./quests.ts";
 import { album } from "./album.ts";
 
 // 原版图号（anim_tbl.h，按 VER25_RELEASE 求值）
@@ -113,6 +114,7 @@ export interface MenuHost {
   gmSend(text: string): void;                   // GM 指令（GmCommand，只有 GM 有选单）
   gmList(kind: string): void;                   // GM 窗口的清单（GmListReq）
   gmDetail(kind: string, id: number): void;     // 清单里一项的详情（GmDetailReq）
+  questReq(): void;                             // 任务日志（QuestReq，打开任务窗口时要一次）
 
 
   autoEncount(): boolean;                       // 自动遇敌开着没有
@@ -147,6 +149,7 @@ export class Menus {
   readonly ai: AiWindow;
   readonly petWnd: PetWindow;
   readonly gm: GmWindow;
+  readonly quests: QuestWindow;
 
   constructor(ui: Ui, host: MenuHost) {
     this.ui = ui; this.host = host;
@@ -166,6 +169,7 @@ export class Menus {
       ui, canvas: host.canvas, send: (t) => host.gmSend(t), list: (k) => host.gmList(k), detail: (k, id) => host.gmDetail(k, id), place: () => host.place(),
       status: () => host.status, pets: () => (this.pets?.pets ?? []).filter((p) => p.slot >= 0 && p.slot < 5).sort((a, b) => a.slot - b.slot),
     });
+    this.quests = new QuestWindow({ ui, chat: (t, c) => host.chat(t, c), se: (no) => host.uiSe(no), refresh: () => host.questReq() });
     this.actions = new ActionWindow({ ui, act: (no) => host.action(no), emote: (spr) => host.emote(spr) });
     this.family = new FamilyWindow({
       ui, canvas: host.canvas, send: (t) => host.family(t), reply: (w, b, d) => host.fmReply(w, b, d), chat: (t, c) => host.chat(t, c),
@@ -197,13 +201,13 @@ export class Menus {
   /** 有窗口开着（CheckMenuFlag 等：这时画面上方的按钮不画） */
   windowOpen(): boolean {
     return this.statusOpen || this.mapOpen || this.systemOpen || this.petWnd.open || this.items.open || album.open
-      || this.actions.open || this.trade.open || this.ai.open || this.mail.open || this.family.open || this.gm.open;
+      || this.actions.open || this.trade.open || this.ai.open || this.mail.open || this.family.open || this.gm.open || this.quests.open;
   }
 
   /** 开着几个窗口（主程序按它的增减放开窗口 202 / 关窗口 203 的声音） */
   openCount(): number {
     return [this.statusOpen, this.mapOpen, this.systemOpen, this.petWnd.open, this.items.open, album.open, this.actions.open,
-      this.trade.open, this.ai.open, this.mail.open, this.family.open, this.gm.open].filter(Boolean).length;
+      this.trade.open, this.ai.open, this.mail.open, this.family.open, this.gm.open, this.quests.open].filter(Boolean).length;
   }
 
   // 原版 menu.cpp：打开道具窗口时关掉地图（MenuToggleFlag &= ~JOY_CTRL_M），打开地图时关掉道具窗口（&= ~JOY_CTRL_I）
@@ -211,7 +215,9 @@ export class Menus {
 
   // 原版：打开状态（Ctrl+S）、宠物（Ctrl+P）、系统（Esc）窗口时 MenuToggleFlag &= JOY_CTRL_I | JOY_CTRL_M，
   // 只留下道具与地图窗口，其他窗口和战斗结果窗口（BattleResultWndFlag）都关掉，所以这三个窗口互斥
-  private closeOthers() { this.statusOpen = false; this.systemOpen = false; this.petWnd.close(); this.result = null; album.open = false; }
+  private closeOthers() { this.statusOpen = false; this.systemOpen = false; this.petWnd.close(); this.result = null; album.open = false; this.quests.open = false; }
+  /** 画面上方的"任务查询"钮：任务窗口，和状态 / 宠物 / 系统窗口一样互斥 */
+  toggleQuests() { const open = !this.quests.open; if (open) this.closeOthers(); this.quests.toggle(); }
   // 相簿（Ctrl+A / 任务栏）：打开时关掉道具与地图以外的窗口（MenuToggleFlag &= JOY_CTRL_I | JOY_CTRL_M）
   toggleAlbum() { const open = !album.open; if (open) this.closeOthers(); album.open = open; }
   toggleStatus() { const open = !this.statusOpen; if (open) this.closeOthers(); this.statusOpen = open; }
@@ -258,6 +264,7 @@ export class Menus {
     this.actions.frame(this.rects);
     this.mail.frame(this.rects);
     this.family.frame(this.rects, this.host.esc());
+    this.quests.frame(this.rects, this.host.esc());
     this.gm.frame(this.rects, this.host.esc());
   }
 

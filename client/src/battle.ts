@@ -739,11 +739,12 @@ export class BattleScreen {
   private applyHit(e: BattleEvent, t: Fighter, a: Fighter, now: number) {
     switch (e.result) {
       case "dodge": {
-        // 闪避：往旁边一闪再回来（SE 8）
+        // 闪避：往攻击者的反方向一闪再回来（SE 8）；攻击者正站在面前，所以就是背着他退一步
         sfx(8, t.x);
         const hx = t.x, hy = t.y;
         this.popup(t, now, { icon: CG.ICON_MISS });
-        t.x = hx - 24; t.y = hy - 18;
+        const dx = hx - a.x, dy = hy - a.y, len = Math.hypot(dx, dy);
+        if (len > 0) { t.x = hx + dx / len * 30; t.y = hy + dy / len * 22; } else { t.x = hx - 24; t.y = hy - 18; }
         setTimeout(() => { t.x = hx; t.y = hy; }, 250);
         return;
       }

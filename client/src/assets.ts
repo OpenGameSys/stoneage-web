@@ -20,6 +20,7 @@ export class Assets {
   private anims = new Map<number, AnimDef | null>();
   private tileIndex = new Map<number, number>(); // 地图图号 → 图像索引
   private tileSize = new Map<number, [number, number]>(); // 地图图号 → 占地格数 [x, y]（adrn atari）
+  private tileFlat = new Set<number>(); // 地图图号：贴地的可走物件（adrn hit 的百位 = 3，map.cpp checkPrioPartsVsChar：永远画在角色下面，如桥、地毯）
   private root: string;
   private renderer: Renderer;
   pending = 0;
@@ -45,6 +46,7 @@ export class Assets {
     for (const r of t.tiles as number[][]) {
       this.tileIndex.set(r[0], r[1]);
       if (r[2] > 1 || r[3] > 1) this.tileSize.set(r[0], [r[2], r[3]]);
+      if (r[4] % 100 !== 0 && Math.floor(r[4] / 100) === 3) this.tileFlat.add(r[0]);
     }
     this.renderer.setPalette(await this.renderer.loadTexture(this.root + "palettes.png", false));
     try { await this.loadIndex(progress); } catch (e) { console.warn("没有二进制索引，改用逐个 JSON", e); this.index = null; }
@@ -106,6 +108,9 @@ export class Assets {
 
   /** 物件的占地：从锚点向 +x 展开 tx 格、向 −y 展开 ty 格 */
   footprint(mapNumber: number): [number, number] { return this.tileSize.get(mapNumber) ?? [1, 1]; }
+
+  /** 贴地的可走物件（桥、地毯）：跟地面一起画，不参与和角色的遮挡排序 */
+  flat(mapNumber: number): boolean { return this.tileFlat.has(mapNumber); }
 
   image(id: number): ImageEntry | null {
     const shift = this.manifest.chunkShift, c = id >>> shift;

@@ -139,6 +139,16 @@ func (r *Ride) Rideable(petSprite int) bool {
 	return false
 }
 
+// LicenceIndex：这种宠物（原形象）是不是要骑乘书的证书骑宠（FamilyRideFunction 的 petlist），是的话回传证书位元的下标，不是回 -1。
+func (r *Ride) LicenceIndex(petSprite int) int {
+	for i, n := range r.PetList {
+		if n == petSprite && i < 32 {
+			return i
+		}
+	}
+	return -1
+}
+
 // playerNo 是 getNOindex：人物原形象 → 人物编号 1..12（100000 起每 20 个一种，100700 起每 10 个一种），100400 起的是 13，其余 -1。
 func playerNo(base int) int {
 	switch {

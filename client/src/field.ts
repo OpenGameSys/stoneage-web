@@ -13,7 +13,7 @@ import type { Quad } from "./renderer.ts";
 export const MOVE: [number, number][] = [[-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
 export const STEP_MS = 260;   // 每走一格的时长；服务端最短 200ms，留出余量
 const VIEW = 15;              // 请求地图的半径
-const CG_INVISIBLE = 99;      // 小于等于该值的物件编号不绘制（含 60..79 的事件标记）
+const CG_INVISIBLE = 99;      // 小于等于该值的地块 / 物件编号不绘制（map.cpp drawMap：tile > CG_INVISIBLE 才画；含 20..59 的声音记号、60..79 的事件标记）
 
 // 循环播放的动作（character.cpp：挥手、高兴、生气、悲伤、走动、站立、点头）
 const LOOP_ACTS = new Set([6, 7, 8, 9, 4, 3, 11]);
@@ -510,7 +510,7 @@ export class Field {
     const groups = new Map<object, Quad[]>();
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
       const k = y * this.width + x;
-      if (!this.walk[k] || !this.tiles[k]) continue;
+      if (!this.walk[k] || this.tiles[k] <= CG_INVISIBLE) continue; // 记号格（如 63）在资源里有占位图（写着 1 / A 的格子），原版不画
       const q = this.mapQuad(this.tiles[k], sx(x, y), sy(x, y));
       if (q) { const g = groups.get(q.tex); if (g) g.push(q); else groups.set(q.tex, [q]); }
     }
@@ -522,6 +522,7 @@ export class Field {
       const k = y * this.width + x;
       if (!this.walk[k] || this.objs[k] <= CG_INVISIBLE) continue;
       const q = this.mapQuad(this.objs[k], sx(x, y), sy(x, y));
+      if (q && this.assets.flat(this.objs[k])) { out.push(q); continue; } // 桥、地毯：紧跟地面画，永远在角色下面
       if (q) {
         const [tx, ty] = this.assets.footprint(this.objs[k]);
         objects.push({ depth: sy(x, y), q, gx: x, gy: y, tx, ty });

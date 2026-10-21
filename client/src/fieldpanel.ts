@@ -45,6 +45,7 @@ export interface PanelHost {
   family(): void;                    // 家族功能
   broadcast(): boolean;              // 族长广播开着（pc.channel == 5，钮换成 CG_FIELD_CHANNEL_BTN_ON 26238）
   actions(): void;                   // 动作窗口
+  quests(): void;                    // 任务查询窗口（quests.ts）
   mailLamp(): boolean;
   chat(text: string, color: string): void;
 }
@@ -112,7 +113,7 @@ export class FieldPanel {
     tip("fp-join", watchOnly ? "观战。" : noJoin ? "不能加入战斗。" : "加入战斗。");
     if (btn(CG.DUEL, RX + 38, 32, "fp-duel") && (!h.inParty() || h.isLeader()) && h.front() && this.canSend()) h.duel();
     tip("fp-duel", "跟其他玩家决斗。");
-    if (btn(CG.HELP, RX + 115, 33, "fp-help")) h.chat("任务查询尚未开放。", FONT.RED);
+    if (btn(CG.HELP, RX + 115, 33, "fp-help")) h.quests();
     tip("fp-help", "任务查询。");
     if (btn(CG.ACT, RX + 68, 32, "fp-act")) h.actions();
     tip("fp-act", "人物的各种动作。");

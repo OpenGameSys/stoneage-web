@@ -37,9 +37,9 @@ export class Mouse {
   downAt = 0; // 左键按下的时刻（原版 mouseLeftPushTime 用）
   attach(canvas: HTMLCanvasElement) {
     const pos = (e: MouseEvent) => {
-      const r = canvas.getBoundingClientRect();
-      this.x = (e.clientX - r.left) * (canvas.width / r.width);
-      this.y = (e.clientY - r.top) * (canvas.height / r.height);
+      const r = canvas.getBoundingClientRect(); // 画布的像素数跟着显示大小变（fitView），滑鼠要换算成 800×600 的逻辑座标
+      this.x = (e.clientX - r.left) * (800 / r.width);
+      this.y = (e.clientY - r.top) * (600 / r.height);
     };
     canvas.addEventListener("mousemove", pos);
     canvas.addEventListener("mousedown", (e) => {
@@ -202,22 +202,35 @@ export function measure(text: string, size = FONT_SIZE): number {
 export const FONT_FAMILY = `"SimSun", "NSimSun", "Songti SC", "Microsoft YaHei", sans-serif`;
 
 /**
- * 2D 覆盖层的分辨率跟着它在屏幕上的显示大小（CSS 像素）走，最多 1600×1200：
- * 画面缩小时按实际大小画；放大时也跟着放大，否则 800×600 的字被拉大后，字和 1 像素的黑色阴影糊成重影。
- * 不乘 devicePixelRatio、设上限，是为了每帧清屏重画的开销不至于太大（按 devicePixelRatio 放大过，移动时明显卡顿）。
- * 尺寸用 ResizeObserver 记下，避免每帧读布局。
+ * 画布的像素数跟着它在屏幕上的实际像素数走（CSS 大小 × devicePixelRatio，ResizeObserver 的 device-pixel-content-box，
+ * 浏览器不支持时用 contentRect × devicePixelRatio），放大、缩小、高分屏都按实际像素画，不让浏览器拉伸 800×600 的画布。
+ * 尺寸用 ResizeObserver 记下，避免每帧读布局；有上限（显卡纹理与 2D 画布每帧清屏重画的开销），超过就由浏览器再缩放。
  */
-const overlaySize = new WeakMap<HTMLCanvasElement, [number, number]>();
-export function fitOverlay(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) {
-  if (!overlaySize.has(canvas)) {
-    overlaySize.set(canvas, [800, 600]);
-    new ResizeObserver(([e]) => {
-      const { width: w, height: h } = e.contentRect;
-      overlaySize.set(canvas, [Math.min(1600, Math.round(w)), Math.min(1200, Math.round(h))]);
-    }).observe(canvas);
+const deviceSize = new WeakMap<HTMLCanvasElement, [number, number]>();
+function trackDeviceSize(canvas: HTMLCanvasElement, maxW: number, maxH: number): [number, number] {
+  if (!deviceSize.has(canvas)) {
+    deviceSize.set(canvas, [800, 600]);
+    const set = (w: number, h: number) => deviceSize.set(canvas, [Math.max(1, Math.min(maxW, Math.round(w))), Math.max(1, Math.min(maxH, Math.round(h)))]);
+    const ro = new ResizeObserver(([e]) => {
+      const d = e.devicePixelContentBoxSize?.[0];
+      if (d) set(d.inlineSize, d.blockSize);
+      else set(e.contentRect.width * devicePixelRatio, e.contentRect.height * devicePixelRatio);
+    });
+    try { ro.observe(canvas, { box: "device-pixel-content-box" }); } catch { ro.observe(canvas); }
   }
-  const [w, h] = overlaySize.get(canvas)!;
-  if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) { canvas.width = w; canvas.height = h; }
+  return deviceSize.get(canvas)!;
+}
+
+/** WebGL 画布：场景在 Renderer 里按 800×600 画，再放大到这个大小 */
+export function fitView(canvas: HTMLCanvasElement) {
+  const [w, h] = trackDeviceSize(canvas, 4096, 3072);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+}
+
+/** 2D 覆盖层：字与方框按实际像素画（800×600 的字被拉大后，字和 1 像素的黑色阴影会糊成重影），逻辑座标仍是 800×600 */
+export function fitOverlay(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) {
+  const [w, h] = trackDeviceSize(canvas, 3200, 2400);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   ctx.setTransform(canvas.width / 800, 0, 0, canvas.height / 600, 0, 0);
 }
 
@@ -272,7 +285,7 @@ export class InputBox {
 
   layout() {
     const r = this.canvas.getBoundingClientRect(), p = this.canvas.parentElement!.getBoundingClientRect();
-    const k = r.width / this.canvas.width;
+    const k = r.width / 800; // 逻辑座标 → CSS 像素
     const [x, y, w, h] = this.rect;
     Object.assign(this.el.style, {
       left: `${r.left - p.left + x * k}px`, top: `${r.top - p.top + y * k}px`,

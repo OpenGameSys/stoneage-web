@@ -276,6 +276,11 @@ export class PetWindow {
     const lines: [string, string][] = [];
     const f = (v: number, i: number) => (v / 100).toFixed(i === 3 ? 1 : 2);
     const four = (v: number[], fmt: (v: number, i: number) => string) => ["攻", "防", "敏", "血"].map((n, i) => `${n}${fmt(v[i] ?? 0, i)}`).join(" ");
+    // 骑乘（服务端 rideInfo）：不能骑 / 可以骑 / 可骑但还差的条件
+    const ri = p.rideInfo ?? "";
+    if (ri === "no") lines.push(["骑乘：这种宠物不能骑", FONT.GRAY]);
+    else if (ri === "ok") lines.push(["骑乘：可以骑乘", FONT.GREEN]);
+    else if (ri.startsWith("need:")) { lines.push(["骑乘：可骑的宠物，还需要", FONT.YELLOW]); for (const c of ri.slice(5).split("、")) lines.push([`　· ${c}`, FONT.YELLOW]); }
     lines.push([`档次 ${ex.rank}　捕获 ${ex.getLevel} 级　编号 ${ex.enemyId}`, FONT.WHITE]);
     const bases = ["体", "腕", "耐", "敏"];
     lines.push([`成长率 ${bases.map((n, i) => `${n}${ex.alloc[i] ?? 0}`).join(" ")}`, FONT.WHITE]);

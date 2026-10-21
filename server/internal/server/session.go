@@ -405,6 +405,8 @@ func (s *session) handleWorld(m proto.Message) {
 		w.GmDetailReq(id, m.Kind, m.ID)
 	case *proto.GmListReq:
 		w.GmListReq(id, m.Kind)
+	case *proto.QuestReq:
+		w.QuestReq(id)
 	case *proto.GmCommand:
 		w.GmCommand(id, m.Text)
 	case *proto.ReturnHome:

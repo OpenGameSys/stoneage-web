@@ -9,10 +9,11 @@ export interface InvItem { slot: number; id: number; name: string; image: number
 export interface BattleEvent { actor: number; kind: string; target: number; result: string; damage: number; hp: number; dead: boolean; ok: boolean; skill: string; status: number; guardian: number; combo: boolean; actorHp: number; mpDamage: number; guarded: boolean; petDamage: number; rideHp: number; fall: boolean; effect: number; actorMp: number; name: string; sprite: number; level: number; maxHp: number; att: string; }
 export interface ShopItem { name: string; level: number; price: number; image: number; info: string; sealed: boolean; slot: number; pile: number; fame: number; }
 export interface PetSkill { slot: number; id: number; name: string; memo: string; field: number; target: number; func: string; option: string; }
-export interface PetInfo { slot: number; name: string; freeName: string; sprite: number; level: number; exp: number; nextExp: number; hp: number; maxHp: number; atk: number; def: number; agi: number; loyalty: number; attrs: number[]; trans: number; maxSkill: number; skills: PetSkill[]; state: string; canRename: boolean; rideable: boolean; items: InvItem[]; guard: boolean; ext: PetExt; }
+export interface PetInfo { slot: number; name: string; freeName: string; sprite: number; level: number; exp: number; nextExp: number; hp: number; maxHp: number; atk: number; def: number; agi: number; loyalty: number; attrs: number[]; trans: number; maxSkill: number; skills: PetSkill[]; state: string; canRename: boolean; rideable: boolean; items: InvItem[]; guard: boolean; ext: PetExt; rideInfo: string; }
 export interface PetExt { rank: number; getLevel: number; enemyId: number; alloc: number[]; std: number[]; grow: number[]; real: number[]; init: number[]; resist: number[]; critical: number; counter: number; rare: number; vai: number; magic: number[]; }
 export interface GmItem { cmd: string; name: string; group: string; args: string[]; kinds: string[]; defaults: string[]; hint: string; }
 export interface GmEntry { id: number; name: string; info: string; image: number; }
+export interface QuestEntry { id: number; name: string; state: string; hint: string; }
 export interface AddressEntry { slot: number; used: boolean; name: string; level: number; dp: number; online: number; face: number; trans: number; }
 export interface PetResult { slot: number; name: string; exp: number; levelUp: number; level: number; }
 
@@ -61,14 +62,16 @@ export interface C2SNpcWindowReply { t: "NpcWindowReply"; id: number; seq: numbe
 export interface C2SPing { t: "Ping"; seq: number; }
 export interface C2SGmCommand { t: "GmCommand"; text: string; }
 export interface C2SGmListReq { t: "GmListReq"; kind: string; }
+export interface C2SQuestReq { t: "QuestReq"; }
 export interface C2SGmDetailReq { t: "GmDetailReq"; kind: string; id: number; }
 export interface C2SLogout { t: "Logout"; }
-export type C2S = C2SSetFlags | C2SCardExchange | C2SCardDelete | C2SMailSend | C2SPetMail | C2SFamily | C2SAction | C2STrade | C2SParty | C2SPartyKick | C2SBattleHelp | C2SJoinBattle | C2SDuel | C2SRegister | C2SLogin | C2SSelectLine | C2SCharList | C2SCharCreate | C2SCharDelete | C2SCharEnter | C2SMapReq | C2SMove | C2STurn | C2STalk | C2SChat | C2SReturnHome | C2SBattleCommand | C2SBattlePetCommand | C2SPetState | C2SPetRename | C2SPetDrop | C2SPetRide | C2SItemMove | C2SPetItemEquip | C2SPetSkillUse | C2SItemUse | C2SMagicUse | C2SItemDrop | C2SGoldDrop | C2SPickUp | C2SStatUp | C2SNpcWindowReply | C2SPing | C2SGmCommand | C2SGmListReq | C2SGmDetailReq | C2SLogout;
+export type C2S = C2SSetFlags | C2SCardExchange | C2SCardDelete | C2SMailSend | C2SPetMail | C2SFamily | C2SAction | C2STrade | C2SParty | C2SPartyKick | C2SBattleHelp | C2SJoinBattle | C2SDuel | C2SRegister | C2SLogin | C2SSelectLine | C2SCharList | C2SCharCreate | C2SCharDelete | C2SCharEnter | C2SMapReq | C2SMove | C2STurn | C2STalk | C2SChat | C2SReturnHome | C2SBattleCommand | C2SBattlePetCommand | C2SPetState | C2SPetRename | C2SPetDrop | C2SPetRide | C2SItemMove | C2SPetItemEquip | C2SPetSkillUse | C2SItemUse | C2SMagicUse | C2SItemDrop | C2SGoldDrop | C2SPickUp | C2SStatUp | C2SNpcWindowReply | C2SPing | C2SGmCommand | C2SGmListReq | C2SQuestReq | C2SGmDetailReq | C2SLogout;
 export type C2SType = C2S["t"];
 
 export interface S2CFlags { t: "Flags"; flags: number; }
 export interface S2CGmMenu { t: "GmMenu"; items: GmItem[]; }
 export interface S2CGmList { t: "GmList"; kind: string; entries: GmEntry[]; }
+export interface S2CQuestLog { t: "QuestLog"; quests: QuestEntry[]; }
 export interface S2CGmDetail { t: "GmDetail"; kind: string; id: number; image: number; lines: string[]; }
 export interface S2CDuelResult { t: "DuelResult"; delta: number; dp: number; }
 export interface S2CFamilyMsg { t: "FamilyMsg"; text: string; }
@@ -117,6 +120,6 @@ export interface S2CBattleTurn { t: "BattleTurn"; turn: number; events: BattleEv
 export interface S2CBattleEnd { t: "BattleEnd"; result: string; exp: number; levelUp: number; level: number; items: string[]; pets: PetResult[]; }
 export interface S2CPets { t: "Pets"; battle: number; ride: number; pets: PetInfo[]; }
 export interface S2CInventory { t: "Inventory"; gold: number; items: InvItem[]; }
-export type S2C = S2CFlags | S2CGmMenu | S2CGmList | S2CGmDetail | S2CDuelResult | S2CFamilyMsg | S2CFamilyStatus | S2CObjFamily | S2CAddressBook | S2CAddressUpdate | S2CMailRecv | S2CObjAction | S2CTradeOpen | S2CTradeItem | S2CTradeGold | S2CTradePet | S2CTradeState | S2CTradeClose | S2CPartyResult | S2CPartyMember | S2CObjMark | S2CHelpFlag | S2CBattleJoin | S2CHello | S2CPetSkillResult | S2CError | S2CAuthResult | S2CServerList | S2CLineSelected | S2CCharListResult | S2CCharCreateResult | S2CSelf | S2CStatus | S2CEnterFloor | S2CMapData | S2CPosCorrect | S2CObjAppear | S2CObjDisappear | S2CObjMove | S2CObjTurn | S2CObjSprite | S2CNpcTalk | S2CNpcWindow | S2CShopWindow | S2CChatMsg | S2CPong | S2CBattleStart | S2CBattleTurn | S2CBattleEnd | S2CPets | S2CInventory;
+export type S2C = S2CFlags | S2CGmMenu | S2CGmList | S2CQuestLog | S2CGmDetail | S2CDuelResult | S2CFamilyMsg | S2CFamilyStatus | S2CObjFamily | S2CAddressBook | S2CAddressUpdate | S2CMailRecv | S2CObjAction | S2CTradeOpen | S2CTradeItem | S2CTradeGold | S2CTradePet | S2CTradeState | S2CTradeClose | S2CPartyResult | S2CPartyMember | S2CObjMark | S2CHelpFlag | S2CBattleJoin | S2CHello | S2CPetSkillResult | S2CError | S2CAuthResult | S2CServerList | S2CLineSelected | S2CCharListResult | S2CCharCreateResult | S2CSelf | S2CStatus | S2CEnterFloor | S2CMapData | S2CPosCorrect | S2CObjAppear | S2CObjDisappear | S2CObjMove | S2CObjTurn | S2CObjSprite | S2CNpcTalk | S2CNpcWindow | S2CShopWindow | S2CChatMsg | S2CPong | S2CBattleStart | S2CBattleTurn | S2CBattleEnd | S2CPets | S2CInventory;
 export type S2CType = S2C["t"];
 

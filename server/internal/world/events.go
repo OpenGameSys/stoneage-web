@@ -54,10 +54,12 @@ func (p *entity) eventNow(bit int) bool { return hasFlag(p.char.NowEvents, bit) 
 
 // setEventDone 是 NPC_EventSetFlg（做完）；setEventNow 是 NPC_NowEventSetFlg（开始）；
 // clearEventNow 是 NPC_NowEventSetFlgCls；clearEvent 是 NPC_NowEndEventSetFlgCls（两组都清掉）。
-func (p *entity) setEventDone(bit int)  { setFlag(&p.char.EndEvents, bit, true) }
-func (p *entity) setEventNow(bit int)   { setFlag(&p.char.NowEvents, bit, true) }
-func (p *entity) clearEventNow(bit int) { setFlag(&p.char.NowEvents, bit, false) }
+// 四个都把 questDirty 记下，对话 / 指令结束时 flushQuests 重送任务日志（quest.go）。
+func (p *entity) setEventDone(bit int)  { setFlag(&p.char.EndEvents, bit, true); p.questDirty = true }
+func (p *entity) setEventNow(bit int)   { setFlag(&p.char.NowEvents, bit, true); p.questDirty = true }
+func (p *entity) clearEventNow(bit int) { setFlag(&p.char.NowEvents, bit, false); p.questDirty = true }
 func (p *entity) clearEvent(bit int) {
 	setFlag(&p.char.NowEvents, bit, false)
 	setFlag(&p.char.EndEvents, bit, false)
+	p.questDirty = true
 }

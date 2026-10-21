@@ -73,6 +73,8 @@ type entity struct {
 	npc              *data.NPC // NPC 才有：对话行为与内容
 	cep              int       // 遇敌值（原版 CONNECT_get_CEP）
 	gm               bool      // 账号在 World.GMs 里（上线时定）
+	questDirty       bool      // 任务旗标改过、任务日志还没重送（quest.go）
+	questSig         string    // 上次送出的任务日志签名（道具栏变动后比对，quest.go refreshQuests）
 	muteUntil        time.Time // GM 的 /mute：这之前不能说话（不存档）
 	worldSentAt      time.Time // 上次在世界频道说话（CHAR_WORKWORLDSENDTIME）
 	chatTokens       float64   // 说话的令牌桶（chatBurst 满、每秒回 chatPerSecond），刷屏的句子直接丢掉
@@ -123,6 +125,7 @@ type World struct {
 	Rules Rules
 	// panics 是 safe 拦下的 panic 次数
 	panics atomic.Int64
+	qhints map[int]string // 事件编号 → 相关 NPC 的提示（quest.go questHints，算一次）
 
 	// saves 是存档队列：由一个协程按顺序写库，保证同一角色的新存档不会被旧存档盖掉
 	saves   chan func()
@@ -314,6 +317,7 @@ func (w *World) Enter(c store.Character, cl Client) {
 		cl.Send(w.statusOf(e))
 		w.sendInventory(e)
 		w.sendPets(e)
+		w.sendQuests(e)
 		w.placeOnFloor(e, c.Floor, c.X, c.Y, c.Dir)
 		w.notifyLoginLogout(e, true) // 名片上的在线
 		w.deliverStoredMails(e)      // MessageFlush

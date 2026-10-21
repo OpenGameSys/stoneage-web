@@ -27,12 +27,13 @@
     "PetInfo": [["slot", "int"], ["name", "string"], ["freeName", "string"], ["sprite", "int"], ["level", "int"],
       ["exp", "int"], ["nextExp", "int"], ["hp", "int"], ["maxHp", "int"], ["atk", "int"], ["def", "int"], ["agi", "int"],
       ["loyalty", "int"], ["attrs", "int[]"], ["trans", "int"], ["maxSkill", "int"], ["skills", "PetSkill[]"],
-      ["state", "string"], ["canRename", "bool"], ["rideable", "bool"], ["items", "InvItem[]"], ["guard", "bool"], ["ext", "PetExt"]],
+      ["state", "string"], ["canRename", "bool"], ["rideable", "bool"], ["items", "InvItem[]"], ["guard", "bool"], ["ext", "PetExt"], ["rideInfo", "string"]],
     "PetExt": [["rank", "int"], ["getLevel", "int"], ["enemyId", "int"], ["alloc", "int[]"], ["std", "int[]"],
       ["grow", "int[]"], ["real", "int[]"], ["init", "int[]"], ["resist", "int[]"], ["critical", "int"], ["counter", "int"],
       ["rare", "int"], ["vai", "int"], ["magic", "int[]"]],
     "GmItem": [["cmd", "string"], ["name", "string"], ["group", "string"], ["args", "string[]"], ["kinds", "string[]"], ["defaults", "string[]"], ["hint", "string"]],
     "GmEntry": [["id", "int"], ["name", "string"], ["info", "string"], ["image", "int"]],
+    "QuestEntry": [["id", "int"], ["name", "string"], ["state", "string"], ["hint", "string"]],
     "AddressEntry": [["slot", "int"], ["used", "bool"], ["name", "string"], ["level", "int"], ["dp", "int"], ["online", "int"], ["face", "int"], ["trans", "int"]],
     "PetResult": [["slot", "int"], ["name", "string"], ["exp", "int"], ["levelUp", "int"], ["level", "int"]]
   },
@@ -84,6 +85,7 @@
     "Ping": [["seq", "int"]],
     "GmCommand": [["text", "string"]],
     "GmListReq": [["kind", "string"]],
+    "QuestReq": [],
     "GmDetailReq": [["kind", "string"], ["id", "int"]],
     "Logout": []
   },
@@ -91,6 +93,7 @@
     "Flags": [["flags", "int"]],
     "GmMenu": [["items", "GmItem[]"]],
     "GmList": [["kind", "string"], ["entries", "GmEntry[]"]],
+    "QuestLog": [["quests", "QuestEntry[]"]],
     "GmDetail": [["kind", "string"], ["id", "int"], ["image", "int"], ["lines", "string[]"]],
 
 

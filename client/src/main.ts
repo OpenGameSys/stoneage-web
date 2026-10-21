@@ -6,8 +6,8 @@ import { MAP_BGM } from "./soundtable.ts";
 import { Connection } from "./net.ts";
 import { Field, MOVE, dirTo, type Label } from "./field.ts";
 import { Renderer } from "./renderer.ts";
-import { CharSelectScreen, LoginScreen, type App, type Screen, CG } from "./screens.ts";
-import { FONT, FONT_FAMILY, FONT_SIZE, InputBox, Mouse, Ui, drawOverlay, fitOverlay, measure } from "./ui.ts";
+import { LineScreen, CharSelectScreen, LoginScreen, type App, type Screen, CG } from "./screens.ts";
+import { FONT, FONT_FAMILY, FONT_SIZE, InputBox, Mouse, Ui, drawOverlay, fitOverlay, fitView, measure } from "./ui.ts";
 import { FONT_PAL, Menus, settings } from "./menus.ts";
 import { ACTION_KEYS } from "./actions.ts";
 import { FieldPanel } from "./fieldpanel.ts";
@@ -17,7 +17,7 @@ import { PetSkillShop, drawPetSelect } from "./petshop.ts";
 import { AutoMap } from "./automap.ts";
 import { loadAi } from "./ai.ts";
 import { AiMemory } from "./aismart.ts";
-import type { AddressEntry, CharSummary, GmEntry, GmItem, PartyMember, S2CBattleEnd, S2CFamilyStatus, S2CGmDetail, S2CInventory, S2CNpcWindow, S2CPets, S2CStatus, ServerGroup } from "./proto.gen.ts";
+import type { AddressEntry, CharSummary, GmEntry, GmItem, PartyMember, QuestEntry, S2CBattleEnd, S2CFamilyStatus, S2CGmDetail, S2CInventory, S2CNpcWindow, S2CPets, S2CStatus, ServerGroup } from "./proto.gen.ts";
 
 const params = new URLSearchParams(location.search);
 const ASSETS = params.get("assets") ?? "/assets/";
@@ -265,6 +265,7 @@ const app: App = {
     // 没有发言者的是系统文字（原版 CHAR_talkToCli(..., -1, ...)，如"交出某某。"），只显示内容
     // GM 指令选单：只有 GM 上线时服务端才发（config.yaml 的 gms）
     c.on("GmMenu", (m) => { gmItems = m.items; if (screen instanceof FieldScreen) screen.setGmMenu(m.items); });
+    c.on("QuestLog", (m) => { questLog = m.quests ?? []; if (screen instanceof FieldScreen) screen.setQuests(questLog); });
     c.on("GmList", (m) => { if (screen instanceof FieldScreen) screen.gmList(m.kind, m.entries); });
     c.on("GmDetail", (m) => { if (screen instanceof FieldScreen) screen.gmDetail(m); });
 
@@ -393,9 +394,10 @@ const app: App = {
   disconnect() { const c = app.net; app.net = null; c?.close(); },
   go(s: Screen) {
     screen.leave?.(); screen = s; s.enter?.();
-    // 选人物的画面放 BGM 2（login.cpp 1672），回到标题淡出（原版标题、选线路都没有音乐）
+    audio.ambientFrame([], 0); // 离开地图画面（登出、断线）：海浪、风声等循环的环境音停掉，不然在选人物画面还一直响
+    // 选人物的画面放 BGM 2（login.cpp 1672），回到标题、选线路淡出（原版标题、选线路都没有音乐）
     if (s instanceof CharSelectScreen) { if (audio.currentBgm !== 2) audio.playBgm(2); }
-    else if (s instanceof LoginScreen) audio.fadeOutBgm();
+    else if (s instanceof LoginScreen || s instanceof LineScreen) audio.fadeOutBgm();
   },
   message(text, then) { modal = { kind: "msg", lines: wrap(text), then }; },
   confirm(text, then) { modal = { kind: "yesno", text, then }; },
@@ -428,6 +430,7 @@ let pendingDuel: { delta: number; dp: number } | null = null; // RD：决斗打�
 let addressBook: AddressEntry[] = [];
 let familyStatus: S2CFamilyStatus | null = null; // F 状态（家族、职位、频道）
 let gmItems: GmItem[] = []; // GM 指令选单（不是 GM 时是空的）
+let questLog: QuestEntry[] = []; // 任务日志（QuestLog，上线与旗标变动时服务端送）
 // 智能战斗学到的伤害：每个角色一份（换角色时换）
 let aiMem: AiMemory | null = null;
 function aiMemory(name: string): AiMemory {
@@ -525,6 +528,7 @@ class FieldScreen implements Screen {
     gmSend: (text) => app.net?.send({ t: "GmCommand", text }),
     gmList: (kind) => app.net?.send({ t: "GmListReq", kind }),
     gmDetail: (kind, id) => app.net?.send({ t: "GmDetailReq", kind, id }),
+    questReq: () => app.net?.send({ t: "QuestReq" }),
     place: () => [field?.floor ?? -1, field?.self?.x ?? 0, field?.self?.y ?? 0],
   });
   private seenSavedAt = 0;
@@ -565,6 +569,7 @@ class FieldScreen implements Screen {
 
   setPets(m: S2CPets) { this.menus.setPets(m); }
   setGmMenu(items: GmItem[]) { this.menus.gm.setMenu(items); }
+  setQuests(q: QuestEntry[]) { this.menus.quests.set(q); }
   gmReply(text: string) { this.menus.gm.reply(text); }
   gmList(kind: string, entries: GmEntry[]) { this.menus.gm.setList(kind, entries); }
   gmDetail(m: S2CGmDetail) { this.menus.gm.setDetail(m); }
@@ -574,6 +579,7 @@ class FieldScreen implements Screen {
     this.menus.mail.load(selfStatus?.name ?? ""); if (addressBook.length) this.menus.mail.setBook(addressBook);
     if (familyStatus) this.menus.family.status = familyStatus;
     this.menus.gm.setMenu(gmItems);
+    this.menus.quests.load(selfStatus?.name ?? ""); this.menus.quests.set(questLog);
   }
 
   /** 开着的窗口数（开窗口 SE 202、关窗口 203 用） */
@@ -719,7 +725,10 @@ class FieldScreen implements Screen {
     }
     // 右上角：楼层名与坐标（原版的小地图位置）
     const s = f.self;
-    if (s && !this.menus.items.open && !this.menus.mapOpen && !this.menus.actions.open) ui.text(792 - measure(`${f.floorName}  ${s.x},${s.y}`), 68, `${f.floorName}  ${s.x},${s.y}`, FONT.WHITE);
+    if (s && !this.menus.items.open && !this.menus.mapOpen && !this.menus.actions.open) {
+      ui.text(792 - measure(`${f.floorName}  ${s.x},${s.y}`), 68, `${f.floorName}  ${s.x},${s.y}`, FONT.WHITE);
+      if (!this.menus.windowOpen() && !modal) this.menus.quests.hud(ui); // 追踪中的任务
+    }
     ui.bottomLineY = 558; // 任务栏常驻在 576..600
     this.menus.frame();
     this.panel.frame(this.menus.rects);
@@ -750,6 +759,7 @@ class FieldScreen implements Screen {
     family: () => this.menus.openFamily(),
     broadcast: () => familyStatus?.channel === 5,
     actions: () => this.menus.actions.toggle(),
+    quests: () => this.menus.toggleQuests(),
     mailLamp: () => mailLamp,
     chat,
   });
@@ -766,6 +776,8 @@ class FieldScreen implements Screen {
 
 let screen: Screen = { frame() {} };
 let frames = 0, fps = 0, fpsAt = performance.now(), workMs = 0;
+let closePendingAt = 0;       // 窗口数减少的时刻（关窗口的声音等 CLOSE_SE_DELAY 再放）
+const CLOSE_SE_DELAY = 250;
 
 function frame(now: number) {
   const workAt = performance.now();
@@ -781,12 +793,15 @@ function frame(now: number) {
   drawModal();
   // 开关窗口的声音（202 / 203），这一帧没有别的界面音效时，点到按钮放 217
   const open = (modal ? 1 : 0) + (screen instanceof FieldScreen ? screen.openCount() : 0);
-  if (open > openPrev) uiSe(202); else if (open < openPrev) uiSe(203);
+  // 关窗口的声音（203）延后一点再放：回上一页、NPC 换页是"关一个、马上开一个"，那种只放开窗口的 202，不要两声一起响
+  if (open > openPrev) { closePendingAt = 0; uiSe(202); } else if (open < openPrev) closePendingAt = now;
+  if (closePendingAt && now - closePendingAt >= CLOSE_SE_DELAY) { closePendingAt = 0; uiSe(203); }
   openPrev = open;
   if (ui.clickSound && !uiSeFrame) audio.se(217);
   uiSeFrame = false;
   audio.update(now);
   ui.end();
+  fitView(canvas);
   renderer.draw(ui.quads, [0, 0, 0]);
   fitOverlay(overlay, ctx2d);
   ctx2d.clearRect(0, 0, 800, 600);
@@ -798,7 +813,7 @@ function frame(now: number) {
   workMs = workMs * 0.95 + (performance.now() - workAt) * 0.05; // 每帧 JS 的耗时（平滑）：显示器或浏览器限了帧率时，看它才知道还有多少余裕
   if (now - fpsAt >= 1000) { fps = frames; frames = 0; fpsAt = now; }
   const hud = document.getElementById("hud");
-  if (hud) hud.textContent = params.has("debug") ? `${fps} fps  每帧 ${workMs.toFixed(1)} ms  ${renderer.drawCalls} 次绘制  显存 ${assets.pageCount} 页 ${Math.round(assets.gpuBytes / 1048576)} MB  加载中 ${assets.pending}  SA 时 ${saHour(now)}` : "";
+  if (hud) hud.textContent = params.has("debug") ? `${fps} fps  每帧 ${workMs.toFixed(1)} ms  ${renderer.drawCalls} 次绘制  输出 ${canvas.width}×${canvas.height}  显存 ${assets.pageCount} 页 ${Math.round(assets.gpuBytes / 1048576)} MB  加载中 ${assets.pending}  SA 时 ${saHour(now)}` : "";
   requestAnimationFrame(frame);
 }
 
@@ -822,6 +837,7 @@ function drawLoading(text: string, p: number) {
 
 (async () => {
   try {
+    fitView(canvas);
     renderer.draw([], [0, 0, 0]);
     drawLoading("正在读取资源索引……", 0);
     await assets.init((p) => drawLoading("正在读取资源索引……", p * 0.15));

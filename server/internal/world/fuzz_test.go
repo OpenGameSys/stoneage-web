@@ -56,6 +56,7 @@ func TestHostileClientInputs(t *testing.T) {
 		"Chat":             func() { w.Chat(id, S(), S(), I(), I()) },
 		"GmCommand":        func() { w.GmCommand(id, "/"+S()+" "+S()) },
 		"GmListReq":        func() { w.GmListReq(id, S()) },
+		"QuestReq":         func() { w.QuestReq(id) },
 		"GmDetailReq":      func() { w.GmDetailReq(id, S(), I()) },
 		"ReturnHome":       func() { w.ReturnHome(id) },
 		"BattleCommand":    func() { w.BattleCommand(id, S(), I(), I()) },

@@ -172,6 +172,7 @@ func (w *World) sendInventory(e *entity) {
 		}
 	}
 	e.client.Send(msg)
+	w.refreshQuests(e) // 用道具记进度的任务（JOT 的检查证明石）跟着道具栏变
 }
 
 // invItem 是 ITEM_makeItemStatusString 的内容（道具栏与宠物身上的道具共用）。
