@@ -15,7 +15,7 @@ import { MailWindow } from "./mail.ts";
 import { FamilyWindow } from "./family.ts";
 import { PetWindow } from "./pets.ts";
 import { AutoMap } from "./automap.ts";
-import { AiWindow } from "./ai.ts";
+import { AiWindow } from "./aisetting.ts";
 import { GmWindow } from "./gm.ts";
 import { QuestWindow } from "./quests.ts";
 import { album } from "./album.ts";
@@ -164,7 +164,13 @@ export class Menus {
       petItem: (p, f, t) => host.petItem(p, f, t), notice: (text) => host.chat(text, FONT.YELLOW),
       petSkill: (p, s, d) => host.petSkill(p, s, d),
     });
-    this.ai = new AiWindow(ui, () => this.items.inv.items);
+    this.ai = new AiWindow({
+      ui, inv: () => this.items.inv.items,
+      petSkills: () => (this.pets?.pets ?? []).find((p) => p.state === "battle")?.skills ?? null,
+      autoBattle: () => settings.autoBattle, toggleAuto: () => this.toggleAuto(),
+      quickBattle: () => settings.quickBattle, toggleQuick: () => this.toggleQuick(),
+      autoEncount: () => host.autoEncount(), setAutoEncount: (on) => host.setAutoEncount(on),
+    });
     this.gm = new GmWindow({
       ui, canvas: host.canvas, send: (t) => host.gmSend(t), list: (k) => host.gmList(k), detail: (k, id) => host.gmDetail(k, id), place: () => host.place(),
       status: () => host.status, pets: () => (this.pets?.pets ?? []).filter((p) => p.slot >= 0 && p.slot < 5).sort((a, b) => a.slot - b.slot),
@@ -278,6 +284,13 @@ export class Menus {
   toggleAuto(say = true) {
     settings.autoBattle = !settings.autoBattle;
     if (say) this.host.chat(settings.autoBattle ? "开启ＡＩ模式！" : "关闭ＡＩ模式！", FONT.RED);
+    this.changed();
+  }
+
+  /** 快速战斗开关（系统菜单、战斗设定窗口） */
+  toggleQuick() {
+    settings.quickBattle = !settings.quickBattle;
+    this.host.chat(settings.quickBattle ? "开启快速战斗！" : "关闭快速战斗！", FONT.RED);
     this.changed();
   }
 
@@ -499,31 +512,9 @@ export class Menus {
       this.changed();
     }
     y2 += 34;
-    if (this.item(x + 140, y2, settings.autoBattle ? "    关闭战斗    " : "    自动战斗    ", "sys-auto")) {
-      settings.autoBattle = !settings.autoBattle;
-      this.host.chat(settings.autoBattle ? "开启ＡＩ模式！" : "关闭ＡＩ模式！", FONT.RED);
-      this.changed();
-    }
-    if (this.ui.hovered("sys-auto")) this.ui.bottomLine = "战斗时照\"战斗设定\"自动行动（也可以按 PageUp / PageDown 切换）。";
-    y2 += 34;
-    // 战斗设定（AI_State = 1）：AI 模式的设定窗口
+    // 战斗设定：自动战斗、快速战斗、自动遇敌的开关与行动计划都在这个窗口里（aisetting.ts）
     if (this.item(x + 140, y2, "    战斗设定  ", "sys-ai")) { this.systemOpen = false; this.ai.show(this.host.status?.name ?? ""); }
-    y2 += 34;
-    // 快速战斗（额外新功能）：遇敌后不切到战斗画面，每回合照战斗设定马上下指令，跳过动画，打完回到地图
-    if (this.item(x + 140, y2, settings.quickBattle ? "    正常战斗    " : "    快速战斗    ", "sys-quick")) {
-      settings.quickBattle = !settings.quickBattle;
-      this.host.chat(settings.quickBattle ? "开启快速战斗！" : "关闭快速战斗！", FONT.RED);
-      this.changed();
-    }
-    if (this.ui.hovered("sys-quick")) this.ui.bottomLine = "快速战斗：不进战斗画面，照\"战斗设定\"自动打完（不播动画）。";
-    y2 += 34;
-    // 自动遇敌（额外新功能）：在现在站的格子与旁边一格之间来回走，直到关掉、手动移动、换地图或耐久力太低
-    const enc = this.host.autoEncount();
-    if (this.item(x + 140, y2, enc ? "    停止遇敌    " : "    自动遇敌    ", "sys-enc")) {
-      this.host.setAutoEncount(!enc);
-      this.systemOpen = false;
-    }
-    if (this.ui.hovered("sys-enc")) this.ui.bottomLine = "自动遇敌：原地来回走动引来敌人（配合自动 / 快速战斗）；手动移动就停止。";
+    if (this.ui.hovered("sys-ai")) this.ui.bottomLine = "自动战斗、快速战斗、自动遇敌，以及人物与宠物每回合的行动。";
     y2 += 34;
 
     // GM 指令：只有服务端发了 GM 选单（config.yaml 的 gms）才有

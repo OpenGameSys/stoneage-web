@@ -17,7 +17,7 @@ import { sfx, setSfx } from "./audio.ts";
 import type { BattleEvent, BattleFighter, InvItem, PetInfo, S2CBattleEnd, S2CBattleJoin, S2CBattleStart, S2CBattleTurn, S2CInventory, S2CPets } from "./proto.gen.ts";
 import { battleItems } from "./items.ts";
 import { album } from "./album.ts";
-import { aiChoose, type AiFighter, type AiSettings } from "./ai.ts";
+import type { AiSettings } from "./ai.ts";
 import { smartChoose, type AiMemory, type SmartFighter } from "./aismart.ts";
 import { FONT, SYS, boxColor, measure, wrapBytes, type Ui } from "./ui.ts";
 
@@ -1174,34 +1174,21 @@ export class BattleScreen {
     this.afterPlayer("item");
   }
 
-  /** 自动战斗（AI_ChooseAction，ai.ts）：按"战斗设定"决定人和宠物这回合的指令；决定的事显示在右下角（AI_Choosen） */
+  /** 自动战斗（aismart.ts smartChoose）：按"战斗设定"决定人和宠物这回合的指令；决定的事显示在右下角（原版 AI_Choosen 的位置） */
   private autoCommand() {
-    const fighters = new Map<number, AiFighter>();
-    for (const [slot, a] of this.fighters) {
-      fighters.set(slot, { slot, hp: a.hp, maxHp: a.f.maxHp, mp: a.mp, level: a.f.level, dead: a.dead, gone: a.gone || a.hidden });
-    }
     const pet = this.myPet();
     const [floor, gx, gy] = this.host.place();
     const s = this.host.aiSettings(), capturePlace = floor !== 500 || (gx >= 250 && gy >= 360);
-    let cmd;
-    if (s.other[2]) {
-      const sf = new Map<number, SmartFighter>();
-      for (const [slot, a] of this.fighters) {
-        sf.set(slot, { slot, name: a.f.name, hp: a.dead ? 0 : a.hp, maxHp: a.f.maxHp, mp: a.mp, level: a.f.level, status: a.status, gone: a.gone || a.hidden });
-      }
-      const sc = smartChoose(s, {
-        me: this.me, first: this.aiFirst, fighters: sf, inv: this.host.inventory().items, myAtk: this.host.myAtk(),
-        pet: pet ? { name: pet.info.freeName || pet.info.name, atk: pet.info.atk, skills: pet.info.skills } : null,
-        capturePlace, noEscape: this.pvp || this.event, mem: this.host.aiMemory(),
-      });
-      this.aiKey = sc.key; this.aiPetKey = sc.petKey;
-      cmd = sc;
-    } else {
-      cmd = aiChoose(s, {
-        me: this.me, first: this.aiFirst, fighters, inv: this.host.inventory().items,
-        petSkills: pet ? pet.info.skills : null, capturePlace,
-      });
+    const sf = new Map<number, SmartFighter>();
+    for (const [slot, a] of this.fighters) {
+      sf.set(slot, { slot, name: a.f.name, hp: a.dead ? 0 : a.hp, maxHp: a.f.maxHp, mp: a.mp, level: a.f.level, status: a.status, gone: a.gone || a.hidden });
     }
+    const cmd = smartChoose(s, {
+      me: this.me, first: this.aiFirst, fighters: sf, inv: this.host.inventory().items, myAtk: this.host.myAtk(),
+      pet: pet ? { name: pet.info.freeName || pet.info.name, atk: pet.info.atk, skills: pet.info.skills } : null,
+      capturePlace, noEscape: this.pvp || this.event, mem: this.host.aiMemory(),
+    });
+    this.aiKey = cmd.key; this.aiPetKey = cmd.petKey;
     this.aiFirst = false;
     for (const t of cmd.chat) this.host.chat(t, FONT.WHITE);
     this.aiLabel = cmd.label;

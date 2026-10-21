@@ -346,7 +346,7 @@ const app: App = {
           if (!quick) audio.fadeOutBgm(() => audio.playBgm(fieldBgm));
           if (end && (end.levelUp > 0 || end.pets?.some((p) => p.levelUp > 0))) audio.se(211); // 升级（结果窗口）
           // 自动丢肉（AI_OtherSetting[0]）：战斗结束时把道具栏里的肉（图 24000..24044）都丢掉
-          if ((settings.autoBattle || quick) && loadAi(selfStatus?.name ?? "").other[0]) {
+          if ((settings.autoBattle || quick) && loadAi(selfStatus?.name ?? "").meat) {
             for (const it of inventory.items) if (it.slot >= 9 && it.image >= 24000 && it.image <= 24044) app.net?.send({ t: "ItemDrop", slot: it.slot });
           }
           if (!quick) app.go(back);

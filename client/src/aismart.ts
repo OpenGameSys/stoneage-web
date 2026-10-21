@@ -1,4 +1,7 @@
-// 智能自动战斗（原版没有，额外新功能；原版的 AI 模式在 ai.ts，设定窗口"其它功能"切换）。
+// 智能自动战斗（原版没有，额外新功能；原版 ai_setting 的 AI 模式已经拿掉，自动战斗一律走这里）。设定在 ai.ts，窗口在 aisetting.ts。
+// 设定里的行动计划（人物 / 宠物各有第一回合与之后每回合）："智能判断"照下面的估值挑；固定的普通攻击 / 防御 / 精灵 / 宠物技能
+// 在没有紧急的事（补血、复活、解状态、逃跑、抓宠）时照做，对象按设定（自己、宠物、主人、敌人……；"自动"按范围选），
+// 找不到那个精灵 / 技能、MP 不够或对象不在时回到智能判断。
 //
 // 每回合把能做的事都列出来、各自估一个"值"，挑最大的，而不是照固定顺序：
 //   1. 估计这回合每个我方的人会挨多少：每个能动的敌人的威胁（学到的平均伤害，没学到时按等级估）平均分到我方，
@@ -15,7 +18,7 @@
 // 存在 localStorage（sa.ai.learn.<角色名>），下一场就用学到的数字估，越打越准。
 
 import type { InvItem, PetSkill } from "./proto.gen.ts";
-import type { AiCommand, AiSettings } from "./ai.ts";
+import type { AiCommand, AiSettings, AiTarget } from "./ai.ts";
 
 export interface SmartFighter {
   slot: number; name: string; hp: number; maxHp: number; mp: number; level: number; status: number; gone: boolean;
@@ -127,7 +130,7 @@ export function smartChoose(s: AiSettings, c: SmartContext): AiCommand & { key: 
   const totalThreat = enemies.reduce((a, e) => a + threat(e), 0), maxThreat = Math.max(...enemies.map(threat));
   const incoming = totalThreat / Math.max(1, aliveAllies.length) + maxThreat * 0.5;
   const weight = (x: SmartFighter) => x.slot === me ? ME_WEIGHT : x.slot % 10 < 5 ? PLAYER_WEIGHT : PET_WEIGHT;
-  const limit = s.limit[0] / 100;
+  const limit = s.healAt / 100;
   const needs = aliveAllies.map((x) => {
     const lethal = x.hp - incoming * 1.2 <= 0, low = x.hp < x.maxHp * limit;
     return { x, lethal, need: lethal || low ? (x.maxHp - x.hp) * weight(x) * (lethal ? 2 : 1) : 0 };
@@ -139,13 +142,6 @@ export function smartChoose(s: AiSettings, c: SmartContext): AiCommand & { key: 
   const send = (kind: AiCommand["kind"], target: number, item: number, label: string, key = "") => {
     out.kind = kind; out.target = target; out.item = item; out.label = label; out.key = key; done = true;
   };
-
-  // 首次：照设定的"首次"精灵（原版的规则，智能模式也保留）
-  const first = s.method[2] >= 0 && s.method[2] < 9 ? c.inv.find((x) => x.slot === s.method[2] && x.magic) : undefined;
-  if (c.first && first && spells.includes(first) && !needs.some((n) => n.lethal)) {
-    const t = first.magicTarget === 0 ? me : first.magicTarget === 2 || first.magicTarget === 8 ? side : first.magicTarget === 3 ? otherSide : me;
-    send("magic", t, first.slot, `首次：${first.magic}`);
-  }
 
   // 补血
   if (!done && needs.length) {
@@ -209,7 +205,7 @@ export function smartChoose(s: AiSettings, c: SmartContext): AiCommand & { key: 
     }
     return v;
   };
-  const captureTarget = s.other[1] && c.capturePlace ? enemies.find((e) => e.level === 1) : undefined;
+  const captureTarget = s.capture && c.capturePlace ? enemies.find((e) => e.level === 1) : undefined;
   const plans: Plan[] = [];
   for (const e of enemies) {
     if (captureTarget && e.slot === captureTarget.slot) continue;
@@ -217,7 +213,7 @@ export function smartChoose(s: AiSettings, c: SmartContext): AiCommand & { key: 
     plans.push({ value: value(new Map([[e.slot, d]]), 0), kind: "attack", target: e.slot, item: -1, label: `攻击：${e.name}`, key: "me:attack", hits: new Map([[e.slot, d]]) });
   }
   const mpReserve = Math.min(...c.inv.filter((it) => it.magicFunc === "MAGIC_Recovery").map((m) => m.magicMp), 1e9);
-  for (const m of spells.filter((m) => m.magicFunc === "MAGIC_AttMagic")) {
+  for (const m of s.magic ? spells.filter((m) => m.magicFunc === "MAGIC_AttMagic") : []) { // "用精灵进攻"关掉：不用攻击精灵
     const key = `me:magic:${m.magic}`, d = c.mem.get(key, atkPrior * 0.8);
     const cost = m.magicMp * (meF.mp - m.magicMp < mpReserve ? 1.5 : 0.3); // 会吃掉补血用的 MP 就贵一点
     const groups: [number, SmartFighter[], string][] = [];
@@ -234,8 +230,8 @@ export function smartChoose(s: AiSettings, c: SmartContext): AiCommand & { key: 
     }
   }
 
-  // 逃跑：打不过而且逃得掉
-  if (!done && !c.noEscape) {
+  // 逃跑：打不过而且逃得掉（"打不过就逃跑"关掉就不逃）
+  if (!done && !c.noEscape && s.escape) {
     const myHp = aliveAllies.reduce((a, x) => a + x.hp, 0), best = Math.max(0, ...plans.map((p) => [...p.hits.values()].reduce((a, b) => a + b, 0)));
     const enemyHp = enemies.reduce((a, e) => a + e.hp, 0);
     const lost = needs.some((n) => n.lethal && n.x.slot === me) || (totalThreat * 2 > myHp && best * 2 * aliveAllies.length < enemyHp);
@@ -244,11 +240,26 @@ export function smartChoose(s: AiSettings, c: SmartContext): AiCommand & { key: 
 
   // 抓宠：只抓 1 级的（原版的规则），没有就逃
   if (!done && captureTarget) send("capture", captureTarget.slot, -1, `抓宠：${captureTarget.name}`);
-  else if (!done && s.other[1] && c.capturePlace && !c.noEscape) { send("escape", -1, -1, "没有 1 级的，逃跑"); return out; }
+  else if (!done && s.capture && c.capturePlace && !c.noEscape) { send("escape", -1, -1, "没有 1 级的，逃跑"); return out; }
+
+  // 固定的行动（设定的第一回合 / 之后每回合）：没有紧急的事时照做
+  const bestEnemy = () => { const p = plans.filter((p) => p.kind === "attack").sort((a, b) => b.value - a.value)[0]; return p ? p.target : enemies[0]?.slot ?? -1; };
+  const act = c.first ? s.first : s.then;
+  let onlyAttack = false;
+  if (!done && act.kind !== "auto") {
+    if (act.kind === "attack") onlyAttack = true;
+    else if (act.kind === "guard") send("guard", -1, -1, "防御");
+    else if (act.kind === "magic") {
+      const m = spells.find((x) => x.magic === act.name);
+      const pf = f(pet), t = m ? magicTargetSlot(m.magicTarget, act.target, me, pet, !!pf && pf.hp > 0, side, otherSide, bestEnemy) : -1;
+      if (m && t >= 0) send("magic", t, m.slot, `${m.magic}`, `me:magic:${m.magic}`);
+      else out.chat.push(`无法使用 ${act.name}，改用智能判断`);
+    }
+  }
 
   let mine0: Plan | undefined;
   if (!done) {
-    mine0 = plans.sort((a, b) => b.value - a.value)[0];
+    mine0 = plans.filter((p) => !onlyAttack || p.kind === "attack").sort((a, b) => b.value - a.value)[0];
     if (mine0) send(mine0.kind, mine0.target, mine0.item, mine0.label, mine0.key);
     else send("attack", enemies[0].slot, -1, "攻击");
   }
@@ -258,6 +269,17 @@ export function smartChoose(s: AiSettings, c: SmartContext): AiCommand & { key: 
   // 宠物
   const petF = f(pet);
   if (c.pet && petF && petF.hp > 0) {
+    // 宠物固定的行动（设定）：普通攻击 = 技能 1、防御 = 技能 2，其余按名字找；对象照设定
+    const pact = c.first ? s.petFirst : s.petThen;
+    if (pact.kind !== "auto") {
+      const skills = c.pet.skills.filter((x) => x.field !== 2);
+      const sk = pact.kind === "attack" ? skills.find((x) => x.id === 1) : pact.kind === "guard" ? skills.find((x) => x.id === 2) : skills.find((x) => x.name === pact.name);
+      const live = enemies.filter((e) => (hp.get(e.slot) ?? 0) > 0 && !(captureTarget && e.slot === captureTarget.slot));
+      const petEnemy = () => (live.sort((a, b) => threat(b) - threat(a))[0] ?? enemies[0])?.slot ?? -1;
+      const t = sk ? petTargetSlot(sk.target, pact.target, me, pet, side, otherSide, petEnemy) : -1;
+      if (sk && t >= 0) { out.pet = [sk.slot, t]; out.petKey = `pet:${c.pet.name}:${sk.id}`; return out; }
+      out.chat.push(`宠物无法使用 ${pact.kind === "attack" ? "攻击" : pact.kind === "guard" ? "防御" : pact.name}，改用智能判断`);
+    }
     const pplans: { value: number; slot: number; target: number; key: string }[] = [];
     const petPrior = Math.max(1, c.pet.atk * 0.5);
     const meDanger = needs.find((n) => n.x.slot === me);
@@ -292,4 +314,38 @@ export function smartChoose(s: AiSettings, c: SmartContext): AiCommand & { key: 
     if (best) { out.pet = [best.slot, best.target]; out.petKey = best.key; }
   }
   return out;
+}
+
+// ---------------- 固定行动的对象 ----------------
+
+/** 咒术的目标编号：按咒术的范围（magicTarget）与设定的对象算出要送的目标；-1 是没有对象（回到智能判断） */
+function magicTargetSlot(type: number, want: AiTarget, me: number, pet: number, petAlive: boolean, side: number, otherSide: number, enemy: () => number): number {
+  const rowOf = (s: number) => s < 0 ? -1 : [26, 25, 23, 24][Math.floor(s / 5)];
+  const single = (def: number) => want === "self" ? me : want === "pet" ? (petAlive ? pet : -1) : want === "enemy" ? enemy() : def;
+  switch (type) {
+    case 0: return me;                                    // 只能对自己
+    case 1: return single(me);                            // 其他人（含自己）：预设自己
+    case 2: return side;                                  // 我方全体
+    case 8: return want === "enemies" ? otherSide : side; // 任一边全体
+    case 3: case 11: return otherSide;                    // 对方全体 / 全部的排
+    case 4: return 22;                                    // 全体
+    case 9: return enemy();                               // 单一敌人
+    case 10: return rowOf(enemy());                       // 一排
+  }
+  return me;
+}
+
+/** 宠物技能的目标编号（PETSKILL_TARGET：0 自己、1 别人含自己、2 我方全体、3 对方全体、4 全部、5 无、6 别人不含自己、7 自己与宠物以外） */
+function petTargetSlot(type: number, want: AiTarget, me: number, pet: number, side: number, otherSide: number, enemy: () => number): number {
+  const single = (allowSelf: boolean, allowOwner: boolean) =>
+    want === "self" && allowSelf ? pet : want === "owner" && allowOwner ? me : enemy();
+  switch (type) {
+    case 0: case 5: return pet;
+    case 1: return single(true, true);
+    case 2: return side;
+    case 3: return otherSide;
+    case 4: return 22;
+    case 6: return single(false, true);
+  }
+  return enemy();
 }
