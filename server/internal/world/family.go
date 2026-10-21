@@ -168,6 +168,8 @@ type Families struct {
 	change  map[int64]int64    // 族长让位：被问的人 → 族长（CHAR_WORKLEADERCHANGE）
 	saves   chan func()
 	ranking []*family          // 综合声望排行（按 total 由高到低），famRank 时重排
+	wars    map[int]*fmWar     // 家族对战的排程（fmwar.go），kv "fmwars"
+	warHome map[int]*World     // 哪条线路在管这场（不存档）
 }
 
 type manorState struct {
@@ -206,6 +208,17 @@ func NewFamilies(db store.Store, log *slog.Logger) *Families {
 	}
 	if s, _ := db.GetKV(ctx, "manors"); s != "" {
 		json.Unmarshal([]byte(s), &f.manors)
+	}
+	f.wars, f.warHome = map[int]*fmWar{}, map[int]*World{}
+	if s, _ := db.GetKV(ctx, "fmwars"); s != "" {
+		json.Unmarshal([]byte(s), &f.wars)
+	}
+	for id, x := range f.wars { // 开机时正在打的那场作废（没有人在场上了）
+		if x == nil {
+			delete(f.wars, id)
+		} else if x.Flag == warPrepare || x.Flag == warFighting {
+			*x = fmWar{ID: id, Manor: x.Manor}
+		}
 	}
 	for i := range f.manors { // 占有的家族已经不在了
 		if f.list[f.manors[i].Owner] == nil {

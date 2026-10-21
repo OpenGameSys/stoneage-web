@@ -46,7 +46,7 @@ func (t *trade) side(e *entity) (*tradeSide, *tradeSide) {
 }
 
 // busy：在战斗或交易中，不能动道具与宠物（原版 CHAR_WORKTRADEMODE != FREE 时那些指令都不理）。
-func (e *entity) busy() bool { return e.fight != nil || e.trade != nil }
+func (e *entity) busy() bool { return e.fight != nil || e.watch != nil || e.trade != nil }
 
 // Trade 是 lssproto_TD_recv：cmd 为 request（D|D）、item / gold / pet（T|…|I / G / P）、lock（C）、ok（K）、cancel（W）。
 func (w *World) Trade(charID int, cmd string, slot, amount int) {

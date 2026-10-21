@@ -39,12 +39,13 @@ type battleRoom struct {
 	// npc 是开这场战斗的 NPC（BattleArray.createindex，遇敌为 nil）；onEnd 在结果送出之后以队长的 "win" / "lose" / "escape" 调用
 	// （原版 BattleArray.WinFunc 只在打赢时由 BATTLE_Finish 调用，见 startBattleWith）。
 	npc   *entity
-	onEnd func(result string)
+	onEnd func(result string, members []*entity) // members 是打完时还在场的玩家（队长在前）
 	no    int  // 战斗编号（地图上的战斗记号）
 	help  bool // 我方开着求救（BSIDE_FLG_HELP_OK），别人可以加入
 	field int  // 战斗背景（加入的人用同一张）
 	// pvp 是玩家对玩家（BATTLE_TYPE_P_vs_P，duel.go）；charaLost：已经有玩家倒下（BATTLE_FLG_CHARALOST，之后逃跑就要扣 DP）
 	pvp, charaLost bool
+	watchers       []*entity // 观战的人（watch.go）：收 BattleStart / BattleTurn / BattleJoin / BattleEnd，不在场上
 }
 
 // member 是站在 slot（或它的宠物位置 slot+5）的玩家。
@@ -117,7 +118,7 @@ func (w *World) startBattle(e *entity, a *data.EncountArea) {
 
 // startBattleWith 是 BATTLE_CreateVsEnemy 共用的部分：e 对已经产生好、排好位置的 enemies 开打。
 // npc、onEnd 见 fight；有 onEnd 的战斗不判定偷袭（BATTLE_SurpriseCheck：WinFunc 不为 NULL 时返回 0）。
-func (w *World) startBattleWith(e *entity, enemies []*battle.Fighter, npc *entity, onEnd func(result string)) {
+func (w *World) startBattleWith(e *entity, enemies []*battle.Fighter, npc *entity, onEnd func(result string, members []*entity)) {
 	b := battle.New(w.rnd)
 	w.battleSeq++
 	room := &battleRoom{b: b, started: w.now(), npc: npc, onEnd: onEnd, no: w.battleSeq}
@@ -302,6 +303,12 @@ func (w *World) armTurnTimer(room *battleRoom, events int) {
 func (w *World) BattleCommand(charID int, kind string, target, item int) {
 	w.Do(func() {
 		e := w.players[charID]
+		if e != nil && e.watch != nil { // 观战者只有"离开"
+			if kind == "leave" {
+				w.stopWatch(e, true)
+			}
+			return
+		}
 		if e == nil || e.fight == nil || e.fight.cmd != nil || !e.fight.b.F[e.fight.slot].Alive() {
 			return
 		}
@@ -335,7 +342,7 @@ func (w *World) BattleCommand(charID int, kind string, target, item int) {
 				if head := e.inv[data.SlotHead]; head == nil || w.game.Items[head.ID] == nil {
 					c.ItemMagic = nil
 				} else {
-					c.MP = w.game.Items[head.ID].MagicMP
+					c.MP = w.magicMP(e, c.ItemMagic, w.game.Items[head.ID].MagicMP)
 				}
 			}
 		case battle.PetSwap:
@@ -432,6 +439,7 @@ func (w *World) resolveTurn(room *battleRoom) {
 	for _, m := range room.members {
 		m.client.Send(msg)
 	}
+	w.sendWatchers(room, msg)
 	if room.pvp {
 		w.duelDeaths(room) // BATTLE_AddDuelPoint
 	}
@@ -449,6 +457,13 @@ func (w *World) resolveTurn(room *battleRoom) {
 		}
 		room.removeMember(m)
 		w.endMember(m, -1)
+	}
+	if len(room.members) == 0 {
+		if room.timer != nil {
+			room.timer.Stop()
+		}
+		w.endWatchers(room) // 全跑光了：观战的人也回地图
+		return
 	}
 	w.armTurnTimer(room, len(ev))
 }
@@ -503,15 +518,17 @@ func (w *World) endBattle(room *battleRoom, win int) {
 		room.timer.Stop()
 	}
 	result := ""
-	for i, m := range append([]*entity(nil), room.members...) {
+	members := append([]*entity(nil), room.members...)
+	for i, m := range members {
 		r := w.endMember(m, win)
 		if i == 0 {
 			result = r
 		}
 	}
 	room.members = nil
+	w.endWatchers(room)
 	if room.onEnd != nil && result != "" {
-		room.onEnd(result)
+		room.onEnd(result, members)
 	}
 }
 
@@ -567,6 +584,9 @@ func (w *World) endMember(e *entity, win int) string {
 	e.client.Send(res)
 	if pvp {
 		w.duelResult(e, ft)
+		if p.HP <= 0 || p.Escaped {
+			w.warLose(e) // 家族对战：出局（CheckLeavePK 送出场）
+		}
 	}
 	w.sendStatus(e)
 	w.broadcastMark(e) // CHAR_sendBattleEffect(OFF)
@@ -733,6 +753,7 @@ func (w *World) saveProgress(e *entity) {
 // abandonBattle：战斗中下线，自己的部分作废（保留当前 HP，倒下的按 1），在场上的人与宠物当作离开；
 // 没有别人了就整场作废，否则等其他人的指令。
 func (w *World) abandonBattle(e *entity) {
+	w.stopWatch(e, false) // 观战中下线
 	ft := e.fight
 	if ft == nil {
 		return
@@ -764,6 +785,7 @@ func (w *World) abandonBattle(e *entity) {
 		if room.timer != nil {
 			room.timer.Stop()
 		}
+		w.endWatchers(room)
 	default:
 		w.tryResolve(room)
 	}

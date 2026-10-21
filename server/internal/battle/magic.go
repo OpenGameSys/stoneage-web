@@ -214,21 +214,13 @@ func (b *Battle) magicRecovery(f *Fighter, c Command, ev *[]Event) {
 	}
 	for _, i := range list {
 		t := b.F[i]
-		heal := int(b.rand(float64(p)*0.9, float64(p)*1.1))
-		if t.riding() {
-			// 骑着时按两边缺的 HP 比例分
-			cm, pm := t.MaxHP-t.HP, t.Ride.MaxHP-t.Ride.HP
-			ch := heal * cm * 100 / max(1, cm+pm) / 100
-			t.Ride.HP = min(t.Ride.MaxHP, t.Ride.HP+heal-ch)
-			heal = ch
-		}
-		t.HP = min(t.MaxHP, t.HP+heal)
+		heal, petHeal := t.heal(int(b.rand(float64(p)*0.9, float64(p)*1.1))) // 骑着时连骑宠一起回复（按缺的比例分）
 		if t.Pet && !t.recovered {
 			t.recovered = true
 			t.AIDelta += aiFixPetRecovery
 		}
 		e := b.magicEvent(f, t, c, MagicHeal, effect)
-		e.Damage = heal
+		e.Damage, e.PetDamage = heal, petHeal
 		*ev = append(*ev, e)
 	}
 }

@@ -35,7 +35,19 @@ func (w *World) rideSprite(e *entity) int {
 	if p == nil {
 		return 0
 	}
-	return w.game.Ride.Sprite(e.char.Sprite, w.weaponSprite(e), p.Sprite, e.pets.Licence[0])
+	return w.mountSprite(e, p.Sprite)
+}
+
+// mountSprite 是 FamilyRideFunction 的全部：先查证书 / 老虎 / 固定配对（data.Ride.Sprite），再查庄园骑宠（Pointpetlist：
+// 家族占有庄园、守护精灵颜色对、不是申请中的人）；骑不了回 0。
+func (w *World) mountSprite(e *entity, petSprite int) int {
+	if s := w.game.Ride.Sprite(e.char.Sprite, w.weaponSprite(e), petSprite, e.pets.Licence[0]); s != 0 {
+		return s
+	}
+	if i := w.game.Ride.ManorIndex(petSprite); i >= 0 && e.fm.Index > 0 && e.fm.Duty != fmDutyApply && w.game.Ride.ManorOK(i, e.fm.Floor, e.fm.Sprite) {
+		return w.game.Ride.ManorSprite(e.char.Sprite, i)
+	}
+	return 0
 }
 
 // PetRide 是 FAMILY_RidePet：slot 为 -1 或已经骑着时下来；否则依次检查后骑上第 slot 格的宠物。
@@ -84,7 +96,10 @@ func (w *World) PetRide(charID, slot int) {
 			w.sysMsg(e, "【系统提示】由于["+p.displayName()+"]已经转生，所以无法骑乘。", colorRed)
 			return
 		}
-		if w.game.Ride.Sprite(e.char.Sprite, w.weaponSprite(e), p.Sprite, e.pets.Licence[0]) == 0 {
+		if w.mountSprite(e, p.Sprite) == 0 {
+			if w.game.Ride.ManorIndex(p.Sprite) >= 0 {
+				w.sysMsg(e, "只有占有庄园、守护精灵颜色相符的家族成员才能骑这只。", colorYellow)
+			}
 			return
 		}
 		e.pets.Ride = slot
@@ -116,8 +131,19 @@ func (w *World) rideInfo(e *entity, p *Pet) string {
 	if p.Trans > 0 {
 		need = append(need, "转生过的宠物不能骑")
 	}
-	if w.game.Ride.Sprite(e.char.Sprite, w.weaponSprite(e), p.Sprite, e.pets.Licence[0]) == 0 {
-		if i := w.game.Ride.LicenceIndex(p.Sprite); i >= 0 && e.pets.Licence[0]&(1<<i) == 0 {
+	if w.mountSprite(e, p.Sprite) == 0 {
+		if mi := w.game.Ride.ManorIndex(p.Sprite); mi >= 0 {
+			switch {
+			case e.fm.Index <= 0 || e.fm.Duty == fmDutyApply:
+				need = append(need, "加入占有庄园的家族（庄园骑宠）")
+			case e.fm.Floor == 0:
+				need = append(need, "家族要先占有庄园")
+			case w.game.Ride.ManorKind[mi] != e.fm.Sprite:
+				need = append(need, "家族的守护精灵颜色不对（蓝暴要光明、红暴要黑暗）")
+			default:
+				need = append(need, "你的人物形象骑不了这只")
+			}
+		} else if i := w.game.Ride.LicenceIndex(p.Sprite); i >= 0 && e.pets.Licence[0]&(1<<i) == 0 {
 			need = append(need, "先用这种宠物的骑乘书学会")
 		} else {
 			need = append(need, "你的人物形象骑不了这只（颜色不合）")
@@ -252,7 +278,7 @@ func (w *World) ridermanReply(p, n *entity, seq, button int, sel string) {
 		// WINDOW_MESSAGETYPE_SHOWRIDEPET：原客户端从自己的骑宠表列出这个人物能骑的宠物，这里由服务端列名字
 		var names []string
 		for i, pet := range w.game.Ride.RidePets {
-			if i < len(w.game.Ride.PetNames) && w.game.Ride.Sprite(p.char.Sprite, w.weaponSprite(p), pet, p.pets.Licence[0]) != 0 {
+			if i < len(w.game.Ride.PetNames) && w.mountSprite(p, pet) != 0 {
 				names = append(names, w.game.Ride.PetNames[i])
 			}
 		}

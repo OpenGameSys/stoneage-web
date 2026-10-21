@@ -11,6 +11,26 @@ import (
 // 咒术（精灵）：装备着的道具带的咒术（道具的 magicid / magicusemp），战斗中用 battle.Magic，地图上用 MagicUse（magic.c MAGIC_Recovery 等的地图部分）。
 
 // equipMagic 是 MAGIC_GetArrayNo：装备位 slot 的道具带的咒术与要的 MP。
+// magicMP 是 magic.c MAGIC_Use / MAGIC_DirectUse 里 shan 加的守护精灵折扣：有家族时，光明精灵（FMSPRITE 0）让 magic.txt 编号 0..31 与
+// 105..107 的咒术 MP ×0.7（MP_RATE），黑暗精灵（1）让 32..81 的 ×0.7；结果取整。装备上送给客户端的 magicMp 也用它，窗口里看到的就是实际要扣的。
+func (w *World) magicMP(e *entity, m *data.Magic, mp int) int {
+	if m == nil || e.fm.Index <= 0 {
+		return mp
+	}
+	id := m.ID
+	switch e.fm.Sprite {
+	case 0:
+		if id >= 0 && id <= 31 || id >= 105 && id <= 107 {
+			return mp * 7 / 10
+		}
+	case 1:
+		if id >= 32 && id <= 81 {
+			return mp * 7 / 10
+		}
+	}
+	return mp
+}
+
 func (w *World) equipMagic(e *entity, slot int) (*data.Magic, int) {
 	if slot < 0 || slot >= data.EquipSlots || e.inv == nil || e.inv[slot] == nil {
 		return nil, 0
@@ -28,7 +48,7 @@ func (w *World) equipMagic(e *entity, slot int) (*data.Magic, int) {
 	if id < 0 || m == nil {
 		return nil, 0
 	}
-	return m, mp
+	return m, w.magicMP(e, m, mp)
 }
 
 // magicTargetValid 是 MAGIC_isTargetValid（_ATTACK_MAGIC）：0..19 单人都行；20 / 21 一边要"点哪边就是哪边"或"整排"的咒术，

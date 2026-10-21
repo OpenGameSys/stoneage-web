@@ -80,7 +80,7 @@ func (w *World) SetFlags(charID, flags int) {
 func (w *World) PartyRequest(charID, request int) {
 	w.Do(func() {
 		e := w.players[charID]
-		if e == nil || e.fight != nil || e.trade != nil {
+		if e == nil || e.fight != nil || e.watch != nil || e.trade != nil {
 			return
 		}
 		if request == 0 {
@@ -100,7 +100,7 @@ func (w *World) partyCandidate(e, o *entity) *entity {
 	if o.party != nil {
 		leader = o.party.leader()
 	}
-	if chebyshev(e, leader) > 1 || leader.fight != nil || leader.fs&fsParty == 0 || leader.trade != nil {
+	if chebyshev(e, leader) > 1 || leader.fight != nil || leader.watch != nil || leader.fs&fsParty == 0 || leader.trade != nil {
 		return nil
 	}
 	if leader.party != nil && leader.party.free() < 0 {
@@ -221,6 +221,9 @@ func (w *World) partyMember(p *party, slot int) *proto.PartyMember {
 	m := p.slots[slot]
 	if m == nil {
 		return &proto.PartyMember{Slot: slot}
+	}
+	if m.kind != "player" { // 巴士 / 飞机当队长（bus.go）
+		return &proto.PartyMember{Slot: slot, Used: true, ID: m.id, Level: 1, MaxHp: 1, HP: 1, Mp: 0, Name: m.name}
 	}
 	st := w.statusOf(m)
 	return &proto.PartyMember{Slot: slot, Used: true, ID: m.id, Level: st.Level, MaxHp: st.MaxHp, HP: st.HP, Mp: st.Mp, Name: m.name}
@@ -375,7 +378,9 @@ func (w *World) broadcastMark(e *entity) {
 // mark 是 e 头上的记号。
 func (e *entity) mark() *proto.ObjMark {
 	m := &proto.ObjMark{ID: e.id, Leader: e.isLeader()}
-	if e.fight != nil {
+	if e.watch != nil {
+		m.Battle = e.watch.no + 1 // 观战的人头上也有战斗记号（CHAR_sendBattleWatch）
+	} else if e.fight != nil {
 		m.Battle = e.fight.room.no + 1
 		m.Help = e.fight.room.help
 	}

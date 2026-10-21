@@ -37,7 +37,9 @@ export class Actor {
     this.leader = !!o.leader; this.battle = o.battle ?? 0; this.help = !!o.help; this.act = o.action ?? -1; this.family = o.family ?? "";
   }
 
-  moving(now: number) { return now - this.stepAt < STEP_MS; }
+  stepMs = STEP_MS;   // 这一步要走多久：自己走是 STEP_MS；服务端代走（别人、队员、巴士）按两步之间收到的间隔，走得才连贯
+  lastMoveAt = 0;     // 上一次收到服务端代走的时刻
+  moving(now: number) { return now - this.stepAt < this.stepMs; }
 
   /** 这一帧变成当前帧时，帧事件 1..9999 是音效（pattern.cpp：play_se(SoundNo, 位置)），Field.build 按画面座标放出来 */
   se = 0;
@@ -50,13 +52,20 @@ export class Actor {
    * 走一格。chain：紧接着上一步连续走时，新的一步从上一步结束的时刻算起（不是从这一帧），
    * 否则每格都会多停不到一帧，帧率低时走路一顿一顿的。
    */
-  stepTo(x: number, y: number, dir: number, now: number, chain = false) {
-    const end = this.stepAt + STEP_MS;
-    const start = chain && now >= end && now - end < STEP_MS / 2 ? end : now;
+  stepTo(x: number, y: number, dir: number, now: number, chain = false, ms = STEP_MS) {
+    const end = this.stepAt + this.stepMs;
+    const start = chain && now >= end && now - end < ms / 2 ? end : now;
     const [px, py] = this.pos(start);
     this.fromX = px; this.fromY = py;
-    this.x = x; this.y = y; this.dir = dir; this.stepAt = start;
+    this.x = x; this.y = y; this.dir = dir; this.stepAt = start; this.stepMs = ms;
     this.act = -1; this.emote = 0;
+  }
+
+  /** 服务端代走的一步：步长按两步之间的间隔（80..600 ms；隔太久就当作重新起步），这样巴士 / 队长走多快就播多快，不会走一步停一步 */
+  serverStep(x: number, y: number, dir: number, now: number) {
+    const dt = now - this.lastMoveAt;
+    this.lastMoveAt = now;
+    this.stepTo(x, y, dir, now, true, dt > 0 && dt < 1000 ? Math.max(80, Math.min(600, dt)) : STEP_MS);
   }
 
   /** 做一个动作（changeCharAct）：重播 */
@@ -68,7 +77,7 @@ export class Actor {
 
   /** 绘制用的插值位置 */
   pos(now: number): [number, number] {
-    const t = Math.min(1, (now - this.stepAt) / STEP_MS);
+    const t = Math.min(1, (now - this.stepAt) / this.stepMs);
     return [this.fromX + (this.x - this.fromX) * t, this.fromY + (this.y - this.fromY) * t];
   }
 
@@ -207,8 +216,8 @@ export class Field {
     net.on("ObjAppear", (m) => { for (const o of m.objs) { this.actors.set(o.id, new Actor(o)); album.seen(o.sprite); } }); // 相簿的"看到"（CheckNewPet）
     net.on("ObjDisappear", (m) => { for (const id of m.ids) this.actors.delete(id); });
     net.on("ObjMove", (m) => {
-      if (m.id === this.self?.id) this.followSteps.push([m.x, m.y, m.dir]); // 队员跟着队长走（服务端替我们走）
-      else this.actors.get(m.id)?.stepTo(m.x, m.y, m.dir, performance.now());
+      if (m.id === this.self?.id) this.followSteps.push([m.x, m.y, m.dir, performance.now()]); // 队员跟着队长走（服务端替我们走）
+      else this.actors.get(m.id)?.serverStep(m.x, m.y, m.dir, performance.now());
     });
     net.on("ObjAction", (m) => { (this.self?.id === m.id ? this.self : this.actors.get(m.id))?.setAct(m.action); });
     net.on("ObjFamily", (m) => { const a = this.actors.get(m.id); if (a) a.family = m.family; });
@@ -355,8 +364,15 @@ export class Field {
     if (!s || this.floor < 0 || this.waitingWarp || s.moving(now)) { this.requestView(); return; }
     if (this.follower) {
       // 队员（partyMoveProc）：自己不能走，只按服务端的步子走；方向键只转身
+      // 跟不上时（分页在背景、或队长是巴士）直接跳到最新的那一步，不让队伍越拉越长
+      if (this.followSteps.length > 4) { const last = this.followSteps[this.followSteps.length - 1]; this.followSteps = []; s.warpTo(last[0], last[1], last[2]); this.requestView(); return; }
       const step = this.followSteps.shift();
-      if (step) s.stepTo(step[0], step[1], step[2], now, true);
+      if (step) { // 步长按服务端两步之间的间隔（队长走多快就跟多快），排队的步子多了就再快一点追上
+        const dt = step[3] - this.lastFollowAt; this.lastFollowAt = step[3];
+        let ms = dt > 0 && dt < 1000 ? Math.max(80, Math.min(600, dt)) : STEP_MS;
+        if (this.followSteps.length >= 2) ms = Math.max(80, ms * 0.6);
+        s.stepTo(step[0], step[1], step[2], now, true, ms);
+      }
       else if (this.wantDir >= 0 && s.dir !== this.wantDir) { s.dir = this.wantDir; this.net.send({ t: "Turn", dir: s.dir }); }
       this.target = null;
       this.requestView();
@@ -404,7 +420,8 @@ export class Field {
   }
 
   follower = false;                              // 在队伍里而且不是队长（partyModeFlag 且不是 LEADER）
-  private followSteps: [number, number, number][] = [];
+  private followSteps: [number, number, number, number][] = []; // x, y, dir, 收到的时刻
+  private lastFollowAt = 0;
   private path: number[] = [];
   private pathGoal = "";
   private finalDir = -1;

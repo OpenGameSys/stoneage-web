@@ -176,16 +176,11 @@ func (b *Battle) itemRecovery(f *Fighter, c Command, kind string, p int, ev *[]E
 			if p == -1 {
 				up = t.MaxHP
 			}
-			if t.riding() {
-				cm, pm := t.MaxHP-t.HP, t.Ride.MaxHP-t.Ride.HP
-				ch := up * cm * 100 / max(1, cm+pm) / 100
-				pet := min(t.Ride.MaxHP-t.Ride.HP, up-ch)
-				t.Ride.HP += pet
-				e.PetDamage, up = pet, ch
+			if p == -1 && t.riding() {
+				up += t.Ride.MaxHP // 全回复：骑宠也补满
 			}
-			up = min(up, t.MaxHP-t.HP)
-			t.HP += up
-			e.Damage = up
+			up, e.PetDamage = t.heal(up) // 骑着时连骑宠一起回复
+			e.Damage, e.HP, e.RideHP = up, t.HP, t.rideHP()
 		} else {
 			if p == 1 {
 				up = t.MaxMP

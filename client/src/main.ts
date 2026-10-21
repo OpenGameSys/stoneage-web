@@ -316,7 +316,7 @@ const app: App = {
       const back = screen;
       field.target = null;
       // 快速战斗：留在地图画面、音乐不换，BattleScreen 只在背后跑（quickFrame）
-      const quick = settings.quickBattle;
+      const quick = settings.quickBattle && !m.watch; // 观战一定看画面
       // 遇敌：SE 215，地图音乐马上停（不淡出），记下来打完再从头播；环境音停掉
       const fieldBgm = audio.currentBgm, bgm = battleBgm(m.pvp || m.event, field.floor, fieldBgm);
       if (!quick) {

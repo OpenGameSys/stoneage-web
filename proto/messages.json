@@ -145,7 +145,7 @@
       ["maxGold", "int"], ["fame", "int"], ["rest", "int"], ["items", "ShopItem[]"]],
     "ChatMsg": [["channel", "string"], ["fromId", "int"], ["from", "string"], ["text", "string"], ["color", "int"]],
     "Pong": [["seq", "int"], ["serverTime", "int"]],
-    "BattleStart": [["field", "int"], ["mySlot", "int"], ["turnTime", "int"], ["surprise", "int"], ["fighters", "BattleFighter[]"], ["pvp", "bool"], ["event", "bool"]],
+    "BattleStart": [["field", "int"], ["mySlot", "int"], ["turnTime", "int"], ["surprise", "int"], ["fighters", "BattleFighter[]"], ["pvp", "bool"], ["event", "bool"], ["watch", "bool"]],
     "BattleTurn": [["turn", "int"], ["events", "BattleEvent[]"]],
     "BattleEnd": [["result", "string"], ["exp", "int"], ["levelUp", "int"], ["level", "int"], ["items", "string[]"],
       ["pets", "PetResult[]"]],

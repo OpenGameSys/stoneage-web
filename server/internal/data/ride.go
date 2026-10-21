@@ -13,7 +13,9 @@ import (
 //   petlist + NewRideNoList   有骑宠证书（CHAR_LOWRIDEPETS 第 i 位）的宠物
 //   CommonPetList + CommonRideNoList + PlayerColor  四色老虎：各颜色的人物只能骑对应颜色的那只
 //   CommonPetList1            雷龙等：{骑乘形象, 人物原形象, 宠物原形象} 完全对上才行
-// Pointpetlist（庄园骑宠，要家族）与 EquipagePetlist（镶嵌道具）还没有对应的系统，不读。
+//   Pointpetlist + PointRideNoList  庄园骑宠：{宠物原形象, {族长家的楼层…}, 守护精灵}，家族占有庄园（族长家在那几层）、
+//                                  守护精灵颜色对上（蓝暴 0 光明、红暴 1 黑暗）、不是申请中的人才能骑，形象按人物编号查 PointRideNoList
+// EquipagePetlist（镶嵌道具）还没有对应的系统，不读。
 
 // Ride 是骑宠资料。
 type Ride struct {
@@ -25,6 +27,10 @@ type Ride struct {
 	CommonPets   []int    // CommonPetList
 	CommonRideNo [][]int  // CommonRideNoList[人物编号-1][颜色]
 	Common1      [][]int  // CommonPetList1：{骑乘形象, 人物原形象, 宠物原形象}
+	ManorPets    []int    // Pointpetlist 的宠物原形象
+	ManorFloors  [][]int  // Pointpetlist 的楼层（族长家）
+	ManorKind    []int    // Pointpetlist 的守护精灵（0 光明 1 黑暗）
+	ManorRideNo  [][]int  // PointRideNoList[人物编号-1][i]
 }
 
 // luaTables 读出 "名字 = {...}" 形式的数字表（嵌套的表、字串略过不管，只收数字）。
@@ -124,9 +130,56 @@ func LoadRide(dataDir string) *Ride {
 			names = append(names, s)
 		}
 	}
-	return &Ride{RidePets: luaInts(t["ridepet"]), PetNames: names, PetList: luaInts(t["petlist"]), NewRideNo: luaRows(t["NewRideNoList"]),
+	r := &Ride{RidePets: luaInts(t["ridepet"]), PetNames: names, PetList: luaInts(t["petlist"]), NewRideNo: luaRows(t["NewRideNoList"]),
 		PlayerColor: luaRows(t["PlayerColor"]), CommonPets: luaInts(t["CommonPetList"]), CommonRideNo: luaRows(t["CommonRideNoList"]),
-		Common1: luaRows(t["CommonPetList1"])}
+		Common1: luaRows(t["CommonPetList1"]), ManorRideNo: luaRows(t["PointRideNoList"])}
+	for _, x := range t["Pointpetlist"] { // {宠物, {楼层…}, 守护精灵}
+		row, ok := x.([]any)
+		if !ok || len(row) < 3 {
+			continue
+		}
+		pet, _ := row[0].(int)
+		floors, _ := row[1].([]any)
+		kind, _ := row[2].(int)
+		if pet > 0 {
+			r.ManorPets = append(r.ManorPets, pet)
+			r.ManorFloors = append(r.ManorFloors, luaInts(floors))
+			r.ManorKind = append(r.ManorKind, kind)
+		}
+	}
+	return r
+}
+
+// ManorIndex：这种宠物是不是庄园骑宠（Pointpetlist），是的话回传下标，不是回 -1。
+func (r *Ride) ManorIndex(petSprite int) int {
+	for i, n := range r.ManorPets {
+		if n == petSprite {
+			return i
+		}
+	}
+	return -1
+}
+
+// ManorOK：家族的族长家楼层与守护精灵合不合第 i 种庄园骑宠的条件。
+func (r *Ride) ManorOK(i, fmFloor, fmSprite int) bool {
+	if i < 0 || i >= len(r.ManorPets) || r.ManorKind[i] != fmSprite {
+		return false
+	}
+	for _, f := range r.ManorFloors[i] {
+		if f == fmFloor {
+			return true
+		}
+	}
+	return false
+}
+
+// ManorSprite：第 i 种庄园骑宠骑在这种人物身上的形象（PointRideNoList[playerid][i]），骑不了回 0。
+func (r *Ride) ManorSprite(base, i int) int {
+	id := playerNo(base)
+	if id < 1 || id-1 >= len(r.ManorRideNo) || i < 0 || i >= len(r.ManorRideNo[id-1]) {
+		return 0
+	}
+	return r.ManorRideNo[id-1][i]
 }
 
 // Rideable 是 FamilyRideCheck：这种宠物（原形象）在骑宠名单里，宠物窗口才显示骑乘按钮。
@@ -136,7 +189,7 @@ func (r *Ride) Rideable(petSprite int) bool {
 			return true
 		}
 	}
-	return false
+	return r.ManorIndex(petSprite) >= 0
 }
 
 // LicenceIndex：这种宠物（原形象）是不是要骑乘书的证书骑宠（FamilyRideFunction 的 petlist），是的话回传证书位元的下标，不是回 -1。

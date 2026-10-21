@@ -115,7 +115,7 @@ export interface S2CNpcWindow { t: "NpcWindow"; id: number; kind: string; button
 export interface S2CShopWindow { t: "ShopWindow"; id: number; seq: number; mode: string; title: string; msg: string; main: string; what: string; level: string; realy: string; full: string; stone: string; sellOnly: boolean; maxGold: number; fame: number; rest: number; items: ShopItem[]; }
 export interface S2CChatMsg { t: "ChatMsg"; channel: string; fromId: number; from: string; text: string; color: number; }
 export interface S2CPong { t: "Pong"; seq: number; serverTime: number; }
-export interface S2CBattleStart { t: "BattleStart"; field: number; mySlot: number; turnTime: number; surprise: number; fighters: BattleFighter[]; pvp: boolean; event: boolean; }
+export interface S2CBattleStart { t: "BattleStart"; field: number; mySlot: number; turnTime: number; surprise: number; fighters: BattleFighter[]; pvp: boolean; event: boolean; watch: boolean; }
 export interface S2CBattleTurn { t: "BattleTurn"; turn: number; events: BattleEvent[]; }
 export interface S2CBattleEnd { t: "BattleEnd"; result: string; exp: number; levelUp: number; level: number; items: string[]; pets: PetResult[]; }
 export interface S2CPets { t: "Pets"; battle: number; ride: number; pets: PetInfo[]; }

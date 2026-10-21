@@ -249,6 +249,12 @@ func (w *World) itemWindowReply(e *entity, win *npcWindow, button int, data_ str
 	case battleSelectSeq:
 		w.joinBattleReply(e, win, button, data_)
 		return
+	case watchSelectSeq:
+		w.watchSelectReply(e, win, button, data_)
+		return
+	case callComeSeq:
+		w.warComeReply(e, win, button)
+		return
 	}
 	if w.fmWindowReply(e, win, button, data_) {
 		return

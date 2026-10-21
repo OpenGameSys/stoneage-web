@@ -108,6 +108,16 @@ func (w *World) NpcWindowReply(charID, npcID, seq, button int, data string) {
 			w.familymanReply(p, n, seq, button, data)
 		case "FmLetter":
 			w.fmLetterReply(p, n, seq, button, data)
+		case "ManorSman":
+			w.manorSmanReply(p, n, win, button, data)
+		case "Scheduleman":
+			w.schedulemanReply(p, n, win, button, data)
+		case "FMWarpMan":
+			w.fmWarpManReply(p, n, win, button)
+		case "FMPKMan":
+			w.fmPkManReply(p, n, win, button, data)
+		case "FMPKCallMan":
+			w.fmPkCallManReply(p, n, win, button, data)
 		case "PetShop":
 			w.petShopReply(p, n, win, button, data)
 		case "PetSkillShop":

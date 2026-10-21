@@ -22,6 +22,7 @@ import type { AiCommand, AiSettings, AiTarget } from "./ai.ts";
 
 export interface SmartFighter {
   slot: number; name: string; hp: number; maxHp: number; mp: number; level: number; status: number; gone: boolean;
+  rideHp?: number; rideMaxHp?: number; // 骑着的宠物（没骑为 0）：补血时连它一起算（回复会按缺的比例分给骑宠）
 }
 
 export interface SmartContext {
@@ -132,8 +133,10 @@ export function smartChoose(s: AiSettings, c: SmartContext): AiCommand & { key: 
   const weight = (x: SmartFighter) => x.slot === me ? ME_WEIGHT : x.slot % 10 < 5 ? PLAYER_WEIGHT : PET_WEIGHT;
   const limit = s.healAt / 100;
   const needs = aliveAllies.map((x) => {
-    const lethal = x.hp - incoming * 1.2 <= 0, low = x.hp < x.maxHp * limit;
-    return { x, lethal, need: lethal || low ? (x.maxHp - x.hp) * weight(x) * (lethal ? 2 : 1) : 0 };
+    const riding = (x.rideMaxHp ?? 0) > 0 && (x.rideHp ?? 0) > 0;
+    const lethal = x.hp - incoming * 1.2 <= 0, low = x.hp < x.maxHp * limit || riding && x.rideHp! < x.rideMaxHp! * limit;
+    const deficit = x.maxHp - x.hp + (riding ? x.rideMaxHp! - x.rideHp! : 0);
+    return { x, lethal, deficit, need: lethal || low ? deficit * weight(x) * (lethal ? 2 : 1) : 0 };
   }).filter((n) => n.need > 0).sort((a, b) => b.need - a.need);
 
   const spells = c.inv.filter((it) => it.magic && it.magicField !== 2 && Math.floor(it.magicMp * 80 / 100) <= meF.mp); // 光精 MP 八折（同原版的 AI）
@@ -149,7 +152,7 @@ export function smartChoose(s: AiSettings, c: SmartContext): AiCommand & { key: 
     const group = heals.filter((m) => m.magicTarget === 2 || m.magicTarget === 8).sort((a, b) => Number(b.magicOption) - Number(a.magicOption))[0];
     if (needs.length >= 2 && group) send("magic", side, group.slot, `全体补血：${group.magic}`);
     else {
-      const t = needs[0].x, deficit = t.maxHp - t.hp;
+      const t = needs[0].x, deficit = needs[0].deficit;
       const single = heals.filter((m) => m.magicTarget === 1 || (m.magicTarget === 0 && t.slot === me));
       const meat = items.find((it) => it.name.includes("肉") && it.memo.includes("耐久力"));
       const healItems = items.filter((it) => it.memo.includes("耐久力") && it.memo.includes("回复"));

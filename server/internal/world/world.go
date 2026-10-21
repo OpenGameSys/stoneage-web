@@ -72,6 +72,9 @@ type entity struct {
 	lastStep         time.Time
 	npc              *data.NPC // NPC 才有：对话行为与内容
 	cep              int       // 遇敌值（原版 CONNECT_get_CEP）
+	watch            *battleRoom // 正在观战的那场（watch.go），不能走动
+	bus              *bus        // 会走动的 NPC（bus.go）：巴士 / 飞机的路线与状态
+	warOut           bool        // 家族对战里倒下 / 逃跑过，等着被送出场（fmwar.go）
 	gm               bool      // 账号在 World.GMs 里（上线时定）
 	questDirty       bool      // 任务旗标改过、任务日志还没重送（quest.go）
 	questSig         string    // 上次送出的任务日志签名（道具栏变动后比对，quest.go refreshQuests）
@@ -125,6 +128,8 @@ type World struct {
 	Rules Rules
 	// panics 是 safe 拦下的 panic 次数
 	panics atomic.Int64
+	buses  []*entity // 会走动的 NPC（bus.go tickBuses）
+	warPlace map[int]*warPlace // 对战场的位置（fmwar.go warPlaces，算一次）
 	qhints map[int]string // 事件编号 → 相关 NPC 的提示（quest.go questHints，算一次）
 
 	// saves 是存档队列：由一个协程按顺序写库，保证同一角色的新存档不会被旧存档盖掉
@@ -164,6 +169,12 @@ func New(game *data.Game, db store.Store, log *slog.Logger, seed int64) *World {
 			x, y := w.bornPoint(n)
 			id++
 			e := &entity{id: id, kind: "npc", name: n.Name, sprite: n.Sprite, floor: floor, x: x, y: y, dir: n.Dir, npc: n}
+			if n.Function == "Bus" || n.Function == "Airplane" {
+				if b := w.newBus(e); b != nil { // 巴士是乘客的队长：要有一个（什么都不送的）连线与视野表，party.go 才能照常用
+					e.bus, e.client, e.visible = b, nopClient{}, map[int]bool{}
+					w.buses = append(w.buses, e)
+				}
+			}
 			w.addToFloor(e)
 			if n.Function == "TimeMan" {
 				w.timeMen = append(w.timeMen, e)
@@ -195,6 +206,12 @@ func (w *World) Run(ctx context.Context) {
 	defer save.Stop()
 	clock := time.NewTicker(timeManInterval)
 	defer clock.Stop()
+	busStep := w.Rules.BusStep
+	if busStep <= 0 {
+		busStep = busLoopTime
+	}
+	busTick := time.NewTicker(busStep)
+	defer busTick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -216,10 +233,13 @@ func (w *World) Run(ctx context.Context) {
 			w.drain()
 		case <-save.C:
 			w.safe(w.saveAll)
+		case <-busTick.C:
+			w.safe(w.tickBuses)
 		case <-clock.C:
 			w.safe(w.updateTimeMen)
 			w.safe(w.sweepGround)
 			w.safe(w.tickPlayers)
+			w.safe(w.tickWars)
 		}
 	}
 }
@@ -413,8 +433,8 @@ func (w *World) Move(charID, x, y, dir int) {
 		if e == nil {
 			return
 		}
-		if e.fight != nil || e.isFollower() || e.trade != nil {
-			// 战斗中不能走；队员不能自己走（CHAR_walk_init 只收转身）；交易中不能走
+		if e.fight != nil || e.watch != nil || e.isFollower() || e.trade != nil {
+			// 战斗中（含观战）不能走；队员不能自己走（CHAR_walk_init 只收转身）；交易中不能走
 			e.client.Send(&proto.PosCorrect{X: e.x, Y: e.y, Dir: e.dir})
 			return
 		}
@@ -484,7 +504,7 @@ func (w *World) Talk(charID, npcID int) {
 			return
 		}
 		n := w.floors[p.floor][npcID]
-		if n == nil || n.npc == nil || n.npc.Function == "" || n.hidden() || p.fight != nil {
+		if n == nil || n.npc == nil || n.npc.Function == "" || n.hidden() || p.fight != nil || p.watch != nil {
 			return
 		}
 		dist := max(abs(n.x-p.x), abs(n.y-p.y))
@@ -609,6 +629,18 @@ func (w *World) Talk(charID, npcID int) {
 			}
 			w.face(p, n)
 			w.windowmanOpen(p, n, 1) // NPC_Riderman_selectWindow(1)
+		case "Bus", "Airplane":
+			w.busTalk(p, n)
+		case "ManorSman":
+			w.manorSmanTalk(p, n)
+		case "Scheduleman":
+			w.schedulemanTalk(p, n)
+		case "FMWarpMan":
+			w.fmWarpManTalk(p, n)
+		case "FMPKMan":
+			w.fmPkManTalk(p, n)
+		case "FMPKCallMan":
+			w.fmPkCallManTalk(p, n)
 		case "Familyman": // NPC_FamilymanLooked
 			w.face(p, n)
 			w.familymanTalk(p, n)
@@ -869,7 +901,7 @@ func (w *World) ReturnHome(charID int) {
 		switch {
 		case e.party != nil && h.Floor == 30691: // _NO_TEAMWARP_SKYLAND
 			msg = "团队中无法回天空之岛！"
-		case e.fight != nil:
+		case e.fight != nil || e.watch != nil:
 			msg = "战斗中无法回纪录点！"
 		case w.hasItemWhere(e, func(d *data.ItemDef) bool { return d.Type == data.ItemWares }): // _ITEM_CHECKWARES
 			msg = "携带货物无法使用。"
@@ -898,6 +930,7 @@ func (w *World) addToFloor(e *entity) {
 
 // placeOnFloor 把玩家放到某楼层的某格（上线或传送），发 EnterFloor 并重建视野。
 func (w *World) placeOnFloor(e *entity, floor, x, y, dir int) {
+	w.stopWatch(e, true) // 被传送走就不看了
 	e.stay = false
 	e.clearAction()
 	w.cancelTrade(e)

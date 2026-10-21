@@ -65,6 +65,8 @@ var gmMenu = []proto.GmItem{
 	{Group: "宠物", Cmd: "/learnride", Name: "骑乘等级", Args: []string{"可骑等级"}, Kinds: []string{"opt:40|80|120|200"}, Defaults: []string{"200"}, Hint: "骑乘训练师的课程：能骑几级以下的宠物"},
 	{Group: "战斗", Cmd: "/encount", Name: "立即遇敌", Hint: "在遇敌区域里马上开打"},
 	{Group: "战斗", Cmd: "/noenc", Name: "不遇敌", Hint: "切换：走路不会遇敌"},
+	{Group: "其他", Cmd: "/war", Name: "家族对战", Args: []string{"对战场", "设成"}, Kinds: []string{"", "opt:prepare|fight|end|clear|show"}, Defaults: []string{"1", "show"},
+		Hint: "对战场 1..4 庄园、11..15 家族 PK 场：prepare 现在可进场、fight 马上开打、end 立刻判胜负、clear 清掉排程"},
 	{Group: "其他", Cmd: "/event", Name: "任务旗标", Args: []string{"编号", "设成"}, Kinds: []string{"", "opt:done|now|clear"}, Defaults: []string{"", "done"}, Hint: "done 做完、now 进行中、clear 清掉"},
 	{Group: "其他", Cmd: "/fm", Name: "家族资料", Args: []string{"项目", "数值"}, Kinds: []string{"opt:fame|fill|manor|gold", ""}, Defaults: []string{"fame", "1000"},
 		Hint: "冒险声望、补满假族人、占有庄园（0 起，-1 放掉）、共同帐户"},
@@ -498,6 +500,59 @@ func (w *World) gmCommand(e *entity, text string) bool {
 		p.addVariableAI(v)
 		w.petsChanged(e)
 		reply("%s 的忠诚度为 %d", p.displayName(), w.petLoyalty(e, p))
+
+	case "/war": // /war 对战场 prepare|fight|end|clear|show：把家族对战的排程拨到某个阶段
+		id := num(1, 1, 99)
+		if bad {
+			return usage()
+		}
+		mode := "show"
+		if len(f) > 2 {
+			mode = f[2]
+		}
+		unlock := w.famLock()
+		x := w.warOf(id)
+		now := w.now().Unix()
+		switch mode {
+		case "prepare":
+			if x.Flag == warNone || x.Flag == warDone {
+				unlock()
+				reply("对战场 %d 没有排程，先去约战。", id)
+				return true
+			}
+			x.Flag, x.At, x.last = warScheduled, now, -1
+		case "fight":
+			if x.Flag == warNone || x.Flag == warDone {
+				unlock()
+				reply("对战场 %d 没有排程，先去约战。", id)
+				return true
+			}
+			x.Flag, x.At, x.Prepare, x.last = warPrepare, now-60, 1, -1
+			w.fam.warHome[id] = w
+		case "end":
+			if x.Flag == warFighting {
+				if place := w.warPlaces()[id]; place != nil {
+					a, b := w.warCount(x, place)
+					winner := 0
+					if a > b {
+						winner = x.Host
+					} else if b > a {
+						winner = x.Guest
+					}
+					w.finishWar(x, place, winner)
+				}
+			}
+		case "clear":
+			w.resetWar(x)
+		case "show":
+		default:
+			unlock()
+			return usage()
+		}
+		w.saveWars()
+		info := fmt.Sprintf("对战场 %d：flag %d，%s vs %s，at %s，prepare %d 分，win %d", id, x.Flag, x.HostName, x.GuestName, time.Unix(x.At, 0).Format("01-02 15:04"), x.Prepare, x.Win)
+		unlock()
+		reply("%s", info)
 
 	case "/event": // /event 编号 [done|now|clear]：设定任务旗标（做完 / 进行中 / 清掉）
 		n := num(1, 0, math.MaxInt32)

@@ -45,14 +45,16 @@ var npcFunctions = map[string]string{"npcgen_man": "TownPeople", "npcgen_signboa
 	"npcgen_winhealer": "WindowHealer", "npcgen_healer": "Healer", "npcgen_warpman": "WarpMan",
 	"windowman": "Windowman", "npcgen_savepoint": "SavePoint", "npcgen_timeman": "TimeMan",
 	"npcgen_shop": "ItemShop", "npcgen_limitshop": "ItemShop", "npcgen_poolitemshop": "PoolItemShop",
-	"npcgen_dengon": "Dengon", "bankman": "Bankman", "npcgen_charm": "Charm", "luckyman": "LuckyMan", "npcgen_janken": "Janken"}
+	"npcgen_dengon": "Dengon", "bankman": "Bankman", "npcgen_charm": "Charm", "luckyman": "LuckyMan", "npcgen_janken": "Janken",
+	"bus": "Bus", "airplane": "Airplane"}
 
 // Implemented 是已经做了对话的 functionset（名字照原版 npc/*.c 的 NPC_<名字>Talked）。
 var Implemented = map[string]bool{"TownPeople": true, "SignBoard": true, "WindowHealer": true, "Healer": true, "WarpMan": true,
 	"Windowman": true, "SavePoint": true, "TimeMan": true, "ItemShop": true, "PoolItemShop": true, "Dengon": true, "Bankman": true,
 	"Charm": true, "LuckyMan": true, "Janken": true, "ExChangeMan": true, "NPCEnemy": true, "Quiz": true,
 	"ItemchangeMan": true, "Mic": true, "Action": true, "PetShop": true, "PetSkillShop": true, "Riderman": true, "Duelranking": true,
-	"Familyman": true, "FmDengon": true, "FmLetter": true, "FmHealer": true}
+	"Familyman": true, "FmDengon": true, "FmLetter": true, "FmHealer": true,
+	"Bus": true, "Airplane": true, "ManorSman": true, "Scheduleman": true, "FMWarpMan": true, "FMPKMan": true, "FMPKCallMan": true}
 
 // loadTemplates 读 npc 目录下所有 .template（npctemplate.c）：模板名 → functionset。
 func loadTemplates(dir string) map[string]string {

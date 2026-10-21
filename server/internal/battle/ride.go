@@ -30,6 +30,24 @@ func (f *Fighter) rideHP() int {
 	return f.Ride.HP
 }
 
+// heal 是 battle_magic.c Magic_RideGetHP（_MAGIC_REHPAI）：骑着时回复量按人与骑宠各缺多少的比例分给两边（都不超过上限），
+// 没骑就全给人。咒术、道具、宠物技能的回复都走这里，回传两边实际回复的量。
+func (f *Fighter) heal(amount int) (ch, pet int) {
+	if amount < 0 {
+		amount = 0
+	}
+	ch = amount
+	if f.riding() {
+		cm, pm := f.MaxHP-f.HP, f.Ride.MaxHP-f.Ride.HP
+		ch = amount * cm / max(1, cm+pm)
+		pet = min(pm, amount-ch)
+		f.Ride.HP += pet
+	}
+	ch = min(ch, f.MaxHP-f.HP)
+	f.HP += ch
+	return ch, pet
+}
+
 // throwing 是 BATTLE_IsThrowWepon：弓、回力镖、投掷类。
 func (f *Fighter) throwing() bool {
 	switch f.Weapon {

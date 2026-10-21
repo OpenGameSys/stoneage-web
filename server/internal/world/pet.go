@@ -286,7 +286,7 @@ func (w *World) petInfo(e *entity, i int) proto.PetInfo {
 		Ext: w.petExt(p), RideInfo: w.rideInfo(e, p),
 
 		// 骑乘钮：这个角色骑得上这只宠物才出现（原客户端按自己的人物与骑宠对照表决定；四色老虎要同色、证书骑宠要学过）
-		Rideable: w.game.Ride.Sprite(e.char.Sprite, w.weaponSprite(e), p.Sprite, e.pets.Licence[0]) != 0}
+		Rideable: w.mountSprite(e, p.Sprite) != 0}
 	for k, id := range p.Skills {
 		if s := w.game.Battle.Skills[id]; id >= 0 && s != nil {
 			info.Skills = append(info.Skills, proto.PetSkill{Slot: k, ID: id, Name: s.Name, Memo: s.Comment, Field: s.Field, Target: s.Target, Func: s.Func, Option: s.Option})

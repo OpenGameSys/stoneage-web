@@ -53,7 +53,7 @@ func (w *World) Duel(charID int) {
 				w.sysMsg(e, "该地图禁止私下PK！", colorYellow)
 				return
 			}
-			if o.fs&fsDuel == 0 {
+			if o.fs&fsDuel == 0 && !w.warOpponents(e, o) { // 家族对战场上开打中的两边不用开决斗开关（NPC_FMBATTLESET 的 CHAR_ISDUEL）
 				continue
 			}
 			cands = append(cands, o)

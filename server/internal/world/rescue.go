@@ -13,7 +13,7 @@ import (
 //	参战     没组队的玩家面向开着求救的战斗里的人按"参战"，站进我方第一个空位（0..4），从下一回合开始下指令；
 //	         面前有好几场可以加入时开选单"加入谁的战斗呢？"
 //
-// 观战（BATTLE_WatchTry，组队时参战会改成观战）还没做：该观战的地方说"无法观战。"。
+// 加不进去（没开求救、决斗、只能观战的楼层、自己在队伍里）就改成观战（watch.go watchTry）。
 
 const battleSelectSeq = 21 // CHAR_WINDOWTYPE_SELECTBATTLE
 
@@ -54,14 +54,13 @@ func (w *World) JoinBattle(charID int) {
 			w.sysMsg(e, " 重复加入战斗! ", colorRed)
 			return
 		}
-		switch e.floor {
-		case 1007, 2007, 3007, 4007, 130, 20000: // 只能观战的地方
-			w.sysMsg(e, "无法观战。", colorYellow)
+		if e.watch != nil {
 			return
 		}
-		if e.party != nil {
-			w.sysMsg(e, "无法观战。", colorYellow) // 组队时参战改成观战
-			return
+		watchOnly := e.party != nil // 组队时参战改成观战（BATTLE_WatchPartyNewEntry）
+		switch e.floor {
+		case 1007, 2007, 3007, 4007, 130, 20000: // 只能观战的地方
+			watchOnly = true
 		}
 		fx, fy := e.x+MOVE[e.dir][0], e.y+MOVE[e.dir][1]
 		var cands []*entity
@@ -71,17 +70,13 @@ func (w *World) JoinBattle(charID int) {
 				continue
 			}
 			found = true
-			if o.fight.room.help && !o.fight.room.pvp && !containsEntity(cands, o) {
+			if !watchOnly && o.fight.room.help && !o.fight.room.pvp && !containsEntity(cands, o) {
 				cands = append(cands, o)
 			}
 		}
 		switch len(cands) {
 		case 0:
-			if !found {
-				w.sysMsg(e, "那里没有任何人。", colorYellow)
-			} else {
-				w.sysMsg(e, "无法观战。", colorYellow)
-			}
+			w.watchTry(e, found) // 加不进去：改成观战
 		case 1:
 			w.rescueEntry(e, cands[0])
 		default:
@@ -137,5 +132,6 @@ func (w *World) rescueEntry(e, target *entity) {
 			m.client.Send(join)
 		}
 	}
+	w.sendWatchers(room, join)
 	w.broadcastMark(e)
 }

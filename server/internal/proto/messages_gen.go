@@ -961,6 +961,7 @@ type BattleStart struct {
 	Fighters []BattleFighter `json:"fighters"`
 	Pvp      bool            `json:"pvp"`
 	Event    bool            `json:"event"`
+	Watch    bool            `json:"watch"`
 }
 
 func (*BattleStart) MsgType() string { return "BattleStart" }

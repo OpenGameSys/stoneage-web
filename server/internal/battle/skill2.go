@@ -501,10 +501,9 @@ func (b *Battle) setMagicPet(f *Fighter, c Command, ev *[]Event) {
 		t := b.F[i]
 		switch kind {
 		case "HP":
-			heal := min(nums, t.MaxHP-t.HP)
-			t.HP += heal
+			heal, petHeal := t.heal(nums) // 骑着时连骑宠一起回复
 			e := b.skillEffect(f, t, s, MagicHeal, sprHeal1)
-			e.Damage = heal
+			e.Damage, e.PetDamage = heal, petHeal
 			*ev = append(*ev, e)
 			continue
 		case "DEX":

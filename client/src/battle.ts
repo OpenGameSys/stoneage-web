@@ -170,6 +170,7 @@ export class BattleScreen {
   private host: BattleHost;
   private fighters = new Map<number, Fighter>();
   private me: number;
+  private watch = false;         // 观战（BattleStart.watch）：没有指令面板，只看；"离开观战"送 BattleCommand leave
   private turnMs: number;
   private surprise: number;
   private tiles: Uint16Array | null = null;
@@ -249,6 +250,8 @@ export class BattleScreen {
     this.host = host;
     this.quick = host.quick();
     this.me = m.mySlot;
+    this.watch = !!m.watch;
+    if (this.watch) { this.sent = true; this.petSent = true; }
     this.pvp = m.pvp;
     this.event = m.event;
     this.turnMs = m.turnTime;
@@ -280,8 +283,8 @@ export class BattleScreen {
   onTurn(m: S2CBattleTurn) {
     this.menuAt = 0; this.selecting = false; this.turns++;
     const ev = m.events;
-    // 智能战斗：看这回合的结果学习（敌人一次打我方多少、自己与宠物这回合的行动打掉多少）
-    {
+    // 智能战斗：看这回合的结果学习（敌人一次打我方多少、自己与宠物这回合的行动打掉多少）；观战不学
+    if (!this.watch) {
       const mem = this.host.aiMemory(), mySide = (s: number) => (s < 10) === (this.me < 10);
       mem.observe(ev, (s) => this.fighters.get(s)?.f.name ?? "", mySide, this.me, this.aiKey, this.aiPetKey);
       mem.save();
@@ -792,6 +795,11 @@ export class BattleScreen {
     this.drawBackground();
     this.drawFighters(now);
     this.drawFx(now);
+    if (this.watch) { // 观战：上方写着观战中，右下角可以离开
+      ui.box(400 - 80, 40, 400 + 80, 62, "rgba(0,0,0,0.6)", true);
+      ui.texts.push({ x: 400, y: 44, text: `观战中　第 ${this.turns + 1} 回合`, color: FONT.YELLOW, align: "center" });
+      if (ui.text(640, 500, "【 离开观战 】", FONT.AQUA, "watch-leave")) this.host.send("leave", -1);
+    }
     // AI_Choosen：自动战斗决定的事，播放中靠右画在 (640 − 宽 − 4, 440) + (80, 60)
     if (this.aiLabel && this.menuAt === 0 && this.host.auto()) {
       ui.text(720 - 4 - measure(this.aiLabel), 500, this.aiLabel, FONT.YELLOW);
@@ -840,7 +848,7 @@ export class BattleScreen {
   }
 
   private openMenu(now: number) {
-
+    if (this.watch) return;
     const me = this.fighters.get(this.me);
     if (!me || me.gone) return;
     this.menuAt = now; this.deadline = now + this.turnMs;
@@ -894,6 +902,8 @@ export class BattleScreen {
       if (e) a.rect = [a.x + fr[1] + e.ox, a.y + fr[2] + e.oy, e.w, e.h];
     }
     for (const a of list) {
+      // 敌人头上常显名字与等级（原版要滑鼠移上去才显示；这里直接画，选目标时的提示照旧）
+      if (a.f.slot >= 10 && !a.dead) ui.texts.push({ x: Math.round(a.x), y: Math.round(a.y - 96), text: `${a.f.name} LV${a.f.level}`, color: FONT.WHITE, align: "center" });
       // 异常状态动画（katino）
       if (a.status > 0 && !a.dead) this.animAt(STATUS_SPR[a.status], a.x, a.y - 64, now);
       // 己方头顶的血条（HpMeterDisp）
@@ -1181,7 +1191,8 @@ export class BattleScreen {
     const s = this.host.aiSettings(), capturePlace = floor !== 500 || (gx >= 250 && gy >= 360);
     const sf = new Map<number, SmartFighter>();
     for (const [slot, a] of this.fighters) {
-      sf.set(slot, { slot, name: a.f.name, hp: a.dead ? 0 : a.hp, maxHp: a.f.maxHp, mp: a.mp, level: a.f.level, status: a.status, gone: a.gone || a.hidden });
+      sf.set(slot, { slot, name: a.f.name, hp: a.dead ? 0 : a.hp, maxHp: a.f.maxHp, mp: a.mp, level: a.f.level, status: a.status, gone: a.gone || a.hidden,
+        rideHp: a.rideHp, rideMaxHp: a.f.rideMaxHp });
     }
     const cmd = smartChoose(s, {
       me: this.me, first: this.aiFirst, fighters: sf, inv: this.host.inventory().items, myAtk: this.host.myAtk(),

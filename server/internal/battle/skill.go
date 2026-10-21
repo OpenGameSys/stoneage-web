@@ -258,9 +258,7 @@ func (b *Battle) support(f *Fighter, c Command, ev *[]Event) {
 		e.Skill = c.Skill.Name
 	}
 	if c.Kind == Heal {
-		amount := min(b.randi(100, t.MaxHP), t.MaxHP-t.HP)
-		t.HP += amount
-		e.Damage = amount
+		e.Damage, e.PetDamage = t.heal(b.randi(100, t.MaxHP)) // 骑着时连骑宠一起回复
 	} else {
 		t.HP = max(1, t.MaxHP/2)
 		t.status = [stCount]int{}

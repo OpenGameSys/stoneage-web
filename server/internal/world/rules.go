@@ -20,6 +20,8 @@ type Rules struct {
 	// 世界频道（_THE_WORLD_SEND，setup.cf THEWORLDTRANS / THEWORLDLEVEL / THEWORLDSNED）：要几转、几级，
 	// 每句扣多少声望（原版内部值，100 = 显示的 1 点）；两句之间至少隔 5 秒
 	WorldTrans, WorldLevel, WorldFame int
+	// BusStep 是长毛象巴士 / 加美航空每走一步的间隔（原版 NPC_BUS_LOOPTIME 200 ms）；客户端按这个节奏连续播走路动画，乘客跟着走
+	BusStep time.Duration
 }
 
 // DefaultRules 是原版的规则，另外经验共享预设开着。
@@ -27,7 +29,7 @@ func DefaultRules() Rules {
 	return Rules{ExpRate: 1, ShareExp: true, DropRate: 1, EncounterRate: 1, TurnTime: TurnTime, LevelUpPoints: LevelUpPoints,
 		GroundItem: itemDeleteTime, GroundPet: petDeleteTime, GroundGold: goldDeleteTime, FamilyFee: fmFee,
 		NoEscapeFloors: []int{12345, 142, 40001, 40002, 40003, 40004, 40005, 40006, 40007, 40008, 40009, 40010, 8252, 8253, 8254, 8256},
-		WorldTrans:     5, WorldLevel: MaxLevel, WorldFame: 1}
+		WorldTrans:     5, WorldLevel: MaxLevel, WorldFame: 1, BusStep: busLoopTime}
 }
 
 // scaleExp 乘上经验倍率（至少 1，打倒了就有经验）。

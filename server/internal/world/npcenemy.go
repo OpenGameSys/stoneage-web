@@ -22,7 +22,8 @@ import (
 //   startmsg / endmsg 开打时、打赢后说的话；steal:0/1 开打时 / 打赢后收走 item 指定的道具；additem 打赢后给的道具
 //   dieact:0 打赢后消失 time 秒（预设 120）；dieact:1 打赢后传送（NEWNPCENEMY 的按 OVER 各段的 FREE 条件选 WARP）
 //
-// 没做的部分：组队（CHAR_talkToCliAndParty 只对自己说、只传送自己）、NEWTIME/Time_Msg（NPC_NPCEnemyWatch 的时间，数据没用到）、
+// 打赢后 endmsg 与 additem 给打完时还在场的每个玩家（原版 NPC_NPCEnemy_Dying 跑 Side[0] 的 5 格），steal 与传送只对队长（Entry[0]）。
+// 没做的部分：开打前 CHAR_talkToCliAndParty 的话只对自己说、NEWTIME/Time_Msg（NPC_NPCEnemyWatch 的时间，数据没用到）、
 // sktype（BATTLE_EnemyRandowSetSkill，数据没用到）、_NPC_REPLACEMENT 的 REPLACEMENT（Check_EnemyWarpMe，数据没用到）、
 // 道场弟子的随机外形（NPC_NPCEnemyInit 的 gymbody：NPC 照 .create 的图号；战斗中第一个敌人用 NPC 的图号与名字）、
 // 战斗类型 BATTLE_TYPE_BOSS_BATTLE（客户端放 BOSS 音乐用，协议里还没有）、道场的 norisk（还没有战败惩罚）。
@@ -301,9 +302,9 @@ func (w *World) npcEnemyBattleIn(p, n *entity) bool {
 		return false // BATTLE_ERR_NOENEMY
 	}
 	p.window = nil
-	w.startBattleWith(p, enemies, n, func(result string) {
+	w.startBattleWith(p, enemies, n, func(result string, members []*entity) {
 		if result == "win" { // BATTLE_Finish：winside == -1（敌方全倒）才调用 WinFunc
-			w.npcEnemyDying(p, n)
+			w.npcEnemyDying(p, n, members)
 		}
 	})
 	w.npcEnemySay(p, n, "startmsg")
@@ -435,19 +436,26 @@ func (w *World) npcEnemySteal(p *entity, arg string) {
 
 // npcEnemyDying 是 NPC_NPCEnemy_Dying（打赢后的 WinFunc）：说 endmsg（NEWNPCENEMY 的在各段里说）、steal:1 收走道具、
 // additem 给道具；dieact:0 让 NPC 消失，dieact:1 把玩家传送走。
-func (w *World) npcEnemyDying(p, n *entity) {
+func (w *World) npcEnemyDying(p, n *entity, members []*entity) {
 	arg := n.npc.Arg
 	newType := strings.Contains(arg, "NEWNPCENEMY")
+	if len(members) == 0 {
+		members = []*entity{p}
+	}
 	if !newType {
-		w.npcEnemySay(p, n, "endmsg")
+		for _, m := range members {
+			w.npcEnemySay(m, n, "endmsg")
+		}
 	}
 	if s, ok := data.ArgField(arg, "steal"); ok && data.Atoi(s) == 1 {
 		w.npcEnemySteal(p, arg)
 	}
 	if s, ok := data.ArgField(arg, "additem"); ok {
-		if def := w.game.Items[data.Atoi(s)]; def != nil && w.addItem(p.inv, w.newItem(def)) >= 0 {
-			w.itemsChanged(p)
-			w.sysMsg(p, "获得"+def.Name, colorYellow)
+		for _, m := range members {
+			if def := w.game.Items[data.Atoi(s)]; def != nil && w.addItem(m.inv, w.newItem(def)) >= 0 {
+				w.itemsChanged(m)
+				w.sysMsg(m, "获得"+def.Name, colorYellow)
+			}
 		}
 	}
 	if npcArgNum(arg, "dieact") != 1 {
