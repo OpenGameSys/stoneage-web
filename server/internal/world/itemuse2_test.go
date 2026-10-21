@@ -21,8 +21,8 @@ func TestItemsBatch2(t *testing.T) {
 	luck := itemByFunc(t, g, "ITEM_Luck", "大吉")
 	w.ItemUse(id, bagSlot(w, id, luck), 0)
 	w.Do(func() {
-		if w.players[id].luck != 5 {
-			t.Errorf("大吉应是运气 5：%d", w.players[id].luck)
+		if w.players[id].char.Luck != 5 {
+			t.Errorf("大吉应是运气 5：%d", w.players[id].char.Luck)
 		}
 	})
 	no := itemByFunc(t, g, "ITEM_useNoenemy", "")

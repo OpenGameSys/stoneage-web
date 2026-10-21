@@ -278,15 +278,18 @@ export class ItemWindow {
       if (ui.clicked(id)) this.click(s, it);
     }
     // 翻页（_NEW_ITEM_）：窗口左缘的三个书签，原版图 55113+i（当前页，画在 513）/ 55110+i（画在 518），
-    // 热区 (508, 160 + 56i)–(528, 157 + 56i + 60)；拿着道具移到书签上也会翻页。导出的资源里没有这几张图，画成木牌（drawTab）
+    // 热区 (508, 160 + 56i)–(528, 157 + 56i + 60)；拿着道具移到书签上也会翻页。导出的资源里没有这几张图，画成木牌（drawTab）。
+    // 木牌画在 2D 覆盖层上（会盖住 WebGL 的图），所以只画在底图左缘书签条（wx − 19 .. wx）的范围里，不压到窗口的边框；
+    // 当前页用亮的石面与往左凸出 1 像素表示
+    const sx1 = this.wx - 19, sx2 = this.wx - 1;
     for (let i = 0; i < 3; i++) {
-      const id = `inv-page${i}`, cur = i === this.page, y1 = 160 + i * 56, y2 = 157 + i * 56 + 60;
-      const on = ui.hitBox(508, y1, 528, y2, id, false);
-      this.drawTab(cur ? 503 : 508, y1, cur ? 530 : 526, y2, cur, i);
-      if (on) ui.box(508, y1, 528, y2, boxColor(), false); // MakeHitBox 的闪烁框
+      const id = `inv-page${i}`, cur = i === this.page, y1 = 160 + i * 56, y2 = 157 + i * 56 + 54;
+      const on = ui.hitBox(sx1, y1, sx2, y2, id, false);
+      this.drawTab(cur ? sx1 - 1 : sx1 + 1, y1, sx2, y2, cur, i);
+      if (on) ui.box(sx1, y1, sx2, y2, boxColor(), false); // MakeHitBox 的闪烁框
       if (on && (ui.clicked(id) || this.held >= 0)) this.page = i;
     }
-    rects.push([503, 160, 528, 157 + 2 * 56 + 60]);
+    rects.push([sx1 - 1, 160, sx2, 157 + 2 * 56 + 54]);
     if (ui.image(CG.CLOSE_BTN, wx + 135, wy + 422, "inv-close") && ui.clicked("inv-close")) { this.open = false; this.held = -1; this.closeGoldInput(); }
     if (!this.petPage) {
       this.goldFrame(wx, wy);
@@ -617,7 +620,8 @@ export class ItemWindow {
     if (lines.length > 2) {
       // 窗口里只放得下 2 行：超过时在道具窗口左边另开一个原版样式的窗口列出全部说明
       const tw = 4, th = Math.max(2, Math.ceil((lines.length * 22 + 44) / 48));
-      const px = wx - tw * 64 - 4, py = Math.max(4, Math.min(600 - 30 - th * 48, wy + 300));
+      const px = wx - 19 - tw * 64 - 4, py = Math.max(4, Math.min(600 - 30 - th * 48, wy + 300)); // 让开左缘的书签条
+
       ui.window(px, py, tw, th);
       ui.text(px + 20, py + 16, it.name, color);
       lines.forEach(([l, c], i) => ui.text(px + 20, py + 40 + i * 22, l, c));

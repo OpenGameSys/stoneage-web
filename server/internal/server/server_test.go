@@ -47,6 +47,8 @@ func startServer(t *testing.T) string {
 	var lines []*Line
 	for i, name := range []string{"一线", "二线"} {
 		w := world.New(game, db, log, int64(i+1))
+		// 世界频道的门槛（5 转 140 级、扣声望）在 world 的测试里测，这里只测转送
+		w.Rules.WorldTrans, w.Rules.WorldLevel, w.Rules.WorldFame = 0, 0, 0
 		go w.Run(ctx)
 		lines = append(lines, &Line{ID: i + 1, Group: "测试区", Name: name, World: w})
 	}

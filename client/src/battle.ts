@@ -13,10 +13,12 @@
 // 攻击者走到目标面前 → 攻击动画 → 在动画的命中帧（事件 10000..10099）让目标受伤 / 闪避 → 走回原位；连击时中途不走回去。
 
 import { ANIM, findAction, type AnimAction, type Assets } from "./assets.ts";
+import { sfx, setSfx } from "./audio.ts";
 import type { BattleEvent, BattleFighter, InvItem, PetInfo, S2CBattleEnd, S2CBattleJoin, S2CBattleStart, S2CBattleTurn, S2CInventory, S2CPets } from "./proto.gen.ts";
 import { battleItems } from "./items.ts";
 import { album } from "./album.ts";
 import { aiChoose, type AiFighter, type AiSettings } from "./ai.ts";
+import { smartChoose, type AiMemory, type SmartFighter } from "./aismart.ts";
 import { FONT, SYS, boxColor, measure, wrapBytes, type Ui } from "./ui.ts";
 
 const CG = {
@@ -27,7 +29,7 @@ const CG = {
   CNT_DOWN_0: 25900,
   BAR_PLAYER: 26019, BAR_PET: 26014,
   ICON_MISS: 26504, ICON_FAIL: 26505, ICON_GET: 26506, ICON_COUNTER: 26507, ICON_NO: 26509, ICON_GUARD: 26510,
-  ICON_ESCAPE: 26511, ICON_CAPTURE: 26512, ICON_LEAVE: 26513, ICON_GUARD_BREAK: 26514,
+  ICON_ESCAPE: 26511, ICON_CAPTURE: 26512, ICON_LEAVE: 26513, ICON_GUARD_BREAK: 26514, ICON_COME_ON: 26501, ICON_GO: 26502,
   HIT_MARK_00: 25500, HIT_MARK_01: 25501, HIT_MARK_10: 25502, HIT_MARK_12: 25504, HIT_MARK_20: 25505, HIT_MARK_22: 25507,
 };
 // 异常状态动画（oft.cpp set_single_jujutsu），下标为状态编号 1 毒 2 麻 3 眠 4 石 5 醉 6 乱 7 虚 8 剧 9 障 10 默
@@ -59,6 +61,15 @@ function slotPos(slot: number): [number, number] {
 }
 
 const HIT_EVENT = (e: number) => e >= 10000 && e < 10100;
+
+/**
+ * play_damage（oft.cpp 1097）：挨打的声音按攻击动画的命中帧记号（武器种类）：10000 空手 250、10001 爪 254、10002 斧 / 10003 棍 251、
+ * 10004 枪 252、10005 弓 / 10006 投掷斧 没有、10007 咒术 254，其余 250；10100 以上（连击）先减 100。
+ */
+function damageSe(marker: number): number {
+  const m = marker >= 10100 ? marker - 100 : marker;
+  return ({ 10000: 250, 10001: 254, 10002: 251, 10003: 251, 10004: 252, 10005: 0, 10006: 0, 10007: 254 } as Record<number, number>)[m] ?? 250;
+}
 const FRAME = 1000 / 60;
 const ANGRY = 8; // loadsprbin.h ANIM_ANGRY
 
@@ -85,6 +96,8 @@ class Fighter {
   dead = false; gone = false; hidden = false;
   private action = ANIM.STAND; private loop = true; private actAt = 0;
   private onHit: (() => void) | null = null; private hitDone = false;
+  private lastFrame = -1;
+  hitMarker = 10000; // 这次攻击动画的命中帧记号（ATR_HIT，挨打的声音按它选）
   rect: [number, number, number, number] | null = null; // 上一帧画出的范围（点选目标用）
 
   constructor(f: BattleFighter) {
@@ -98,7 +111,7 @@ class Fighter {
   homeDir() { return this.f.slot < 10 ? 3 : 7; } // 己方朝左上，敌方朝右下
 
   play(action: number, now: number, loop = false, onHit: (() => void) | null = null) {
-    this.action = action; this.loop = loop; this.actAt = now; this.onHit = onHit; this.hitDone = false;
+    this.action = action; this.loop = loop; this.actAt = now; this.onHit = onHit; this.hitDone = false; this.lastFrame = -1;
   }
 
   frame(assets: Assets, now: number): [number, number, number] | null {
@@ -114,9 +127,16 @@ class Fighter {
       else if (this.dead || this.action === ANIM.DEAD) i = act.frames.length - 1;
       else { this.play(ANIM.STAND, now, true); act = findAction(def, this.dir, ANIM.STAND)!; i = 0; }
     } else if (this.onHit && !this.hitDone) {
-      for (let k = 0; k <= i; k++) if (HIT_EVENT(act.frames[k][3])) { this.hitDone = true; this.onHit(); break; }
+      for (let k = 0; k <= i; k++) if (HIT_EVENT(act.frames[k][3])) { this.hitMarker = act.frames[k][3]; this.hitDone = true; this.onHit(); break; }
     }
-    const [img, fx, fy] = act.frames[Math.min(i, act.frames.length - 1)];
+    // 帧事件 1..9999 是音效（pattern.cpp），这一帧刚变成当前帧时放
+    const idx = Math.min(i, act.frames.length - 1);
+    if (idx !== this.lastFrame) {
+      this.lastFrame = idx;
+      const ev = act.frames[idx][3];
+      if (ev > 0 && ev < 10000) sfx(ev, this.x);
+    }
+    const [img, fx, fy] = act.frames[idx];
     return img < 0 ? null : [img, fx, fy];
   }
 }
@@ -131,6 +151,7 @@ export interface BattleHost {
   assets: Assets;
   root: string; // 资源根目录（读 battlemap）
   sendHelp(on: boolean): void; // lssproto_HL_send
+  captured(): void;            // 自己抓到宠物（放抓宠的音乐）
   send(kind: string, target: number, item?: number): void;
   sendPet(skill: number, target: number): void; // 宠物的指令（lssproto_B "W|技能|目标"，-1 为什么也不做）
   pets(): S2CPets | null;
@@ -138,8 +159,11 @@ export interface BattleHost {
   chat(text: string, color: string): void;
   auto(): boolean; // 是否开着自动战斗
   aiSettings(): AiSettings; // 战斗设定（ai.ts）
+  aiMemory(): AiMemory;     // 智能战斗学到的伤害（aismart.ts）
+  myAtk(): number;          // 自己的攻击力（状态窗口的数字）
   place(): [number, number, number]; // 楼层、x、y（自动抓宠在楼层 500 的部分区域不动作）
   finish(end: S2CBattleEnd | null): void; // 战斗画面结束，回到地图（结果窗口画在地图上）
+  quick(): boolean;         // 快速战斗：不画战斗画面（quickFrame），开战时决定
 }
 
 export class BattleScreen {
@@ -188,7 +212,13 @@ export class BattleScreen {
   private end: S2CBattleEnd | null = null;
   private helpFlag = false;
   pvp = false; // DuelFlag：决斗
+  private event = false; // eventEnemyFlag：NPC 开的战斗（智能战斗不考虑逃跑）
+  private aiKey = ""; private aiPetKey = ""; // 智能战斗这回合选的行动（学习用）
   private endIdleAt = 0;
+  // 快速战斗（额外新功能）：不切到战斗画面，排队的动画用快进的时钟一口气播完（只为了照样更新 HP、倒下、捕获等状态），
+  // 马上照战斗设定下指令；服务端收齐指令就结算，所以整场几乎是一瞬间打完
+  readonly quick: boolean;
+  private clock = 0;
 
   /** lssproto_HL_recv：服务端的求救旗标 */
   setHelp(on: boolean) { this.helpFlag = on; }
@@ -217,8 +247,10 @@ export class BattleScreen {
 
   constructor(host: BattleHost, m: S2CBattleStart) {
     this.host = host;
+    this.quick = host.quick();
     this.me = m.mySlot;
     this.pvp = m.pvp;
+    this.event = m.event;
     this.turnMs = m.turnTime;
     this.surprise = m.surprise;
     for (const f of m.fighters) {
@@ -230,12 +262,13 @@ export class BattleScreen {
       this.fighters.set(f.slot, a);
     }
     const no = String(Math.max(0, m.field)).padStart(2, "0");
-    fetch(`${host.root}battlemap/battle${no}.sab`).then((r) => r.ok ? r.arrayBuffer() : Promise.reject(r.status)).then((b) => {
+    if (this.quick) this.tiles = new Uint16Array(0); // 不画背景
+    else fetch(`${host.root}battlemap/battle${no}.sab`).then((r) => r.ok ? r.arrayBuffer() : Promise.reject(r.status)).then((b) => {
       const v = new DataView(b), t = new Uint16Array(400);
       for (let i = 0; i < 400 && 4 + i * 2 + 1 < b.byteLength; i++) t[i] = v.getUint16(4 + i * 2);
       this.tiles = t;
     }).catch(() => { this.tiles = new Uint16Array(0); });
-    this.queue.push(this.enterStep());
+    if (!this.quick) this.queue.push(this.enterStep());
     const self = m.fighters.find((f) => f.slot === m.mySlot);
     this.memKey = self ? `sa.battle.${self.name}` : "";
     try {
@@ -247,6 +280,13 @@ export class BattleScreen {
   onTurn(m: S2CBattleTurn) {
     this.menuAt = 0; this.selecting = false; this.turns++;
     const ev = m.events;
+    // 智能战斗：看这回合的结果学习（敌人一次打我方多少、自己与宠物这回合的行动打掉多少）
+    {
+      const mem = this.host.aiMemory(), mySide = (s: number) => (s < 10) === (this.me < 10);
+      mem.observe(ev, (s) => this.fighters.get(s)?.f.name ?? "", mySide, this.me, this.aiKey, this.aiPetKey);
+      mem.save();
+      this.aiKey = ""; this.aiPetKey = "";
+    }
     for (let i = 0; i < ev.length; i++) {
       if (ev[i].actor < 0) {
         // 战场属性的回合数到了，回到无属性
@@ -414,9 +454,10 @@ export class BattleScreen {
         }));
         break;
       case "petin": {
-        // BATTLE_PetIn（BS f0）：宠物转身跑回去、离开战场
+        // BATTLE_PetIn（BS f0）：主人头上冒"Come On!"、SE 216（oft.cpp case 60），宠物转身跑回去、离开战场
         const t = this.fighters.get(e.target);
         if (!t || t.gone) break;
+        steps.push(this.waitStep(400, (now) => { this.popup(a, now, { icon: CG.ICON_COME_ON }); sfx(216, a.x); }));
         steps.push(this.waitStep(1, () => { t.dir = (t.homeDir() + 4) & 7; }));
         const off = t.f.slot < 10 ? 400 : -400;
         steps.push(this.moveStep(t, () => [t.homeX + off, t.homeY + off], 700, false));
@@ -424,12 +465,14 @@ export class BattleScreen {
         break;
       }
       case "petout": {
-        // BATTLE_PetOut（BS f1）：新的宠物从画面外跑进来
+        // BATTLE_PetOut（BS f1）：主人头上冒"Go!"（oft.cpp case 62），新的宠物从画面外跑进来
         const f: BattleFighter = { slot: e.target, name: e.name, sprite: e.sprite, level: e.level, hp: e.hp, maxHp: e.maxHp, mp: 0, maxMp: 0,
           rideName: "", rideLevel: 0, rideHp: 0, rideMaxHp: 0, fallSprite: 0 };
         const n = new Fighter(f);
         const off = f.slot < 10 ? 400 : -400;
+        steps.push(this.waitStep(400, (now) => { this.popup(a, now, { icon: CG.ICON_GO }); }));
         steps.push(this.waitStep(1, () => { n.x = n.homeX + off; n.y = n.homeY + off; this.fighters.set(f.slot, n); }));
+
         steps.push(this.moveStep(n, () => [n.homeX, n.homeY], 700, true));
         steps.push(this.waitStep(1, () => { n.dir = n.homeDir(); }));
         break;
@@ -492,7 +535,7 @@ export class BattleScreen {
   }
 
   /**
-   * 咒术（BJ）：施法者原地做动作、身上放出 MAGIC_EFFECT_USER，接着每个对象身上放出效果动画（回复 / 状态 / 攻击魔法的图），
+   * 咒术（BJ）：施法者转回原来的方向站着、身上放出 MAGIC_EFFECT_USER，接着每个对象身上放出效果动画（回复 / 状态 / 攻击魔法的图），
    * 播完时一起结算：回复与复活冒绿字，攻击魔法冒红字，附加状态失败冒"Fail..."，闪开冒"Miss"。没有对象（MP 不够、沉默）时只冒"Fail..."。
    */
   private magicSteps(a: Fighter, group: BattleEvent[], userEffect = JUJUTU.EFFECT_USER): Step[] {
@@ -500,8 +543,12 @@ export class BattleScreen {
     const steps: Step[] = [];
     steps.push(this.waitStep(700, (now) => {
       this.showSkill(first.skill, now);
-      a.play(ANIM.ATTACK, now);
+      // oft.cpp ATT_JUJUTSU → case 75：施法的人（人或宠物）不做攻击动作，只转回自己那一边的方向（我方 3、敌方 7）站着，
+      // 效果动画放在他身上（以前这里播攻击动作，宠物施法时会对着空气扑一下）
+      a.dir = a.homeDir();
+      a.play(ANIM.STAND, now, true);
       a.mp = first.actorMp;
+
       this.animOnce(userEffect, a.x, a.y, now);
       if (first.target < 0 && first.result === "fail") this.popup(a, now, { icon: CG.ICON_FAIL });
     }));
@@ -624,6 +671,7 @@ export class BattleScreen {
         a.play(ANIM.STAND, now, true); a.dir = a.homeDir();
         t.gone = true;
         this.popup(a, now, { icon: CG.ICON_GET });
+        if (a.f.slot === this.me && !this.quick) this.host.captured(); // 抓到宠物的音乐（oft.cpp 8675：play_bgm(0)）
       }));
     } else {
       steps.push(this.waitStep(700, (now) => { this.popup(a, now, { icon: CG.ICON_FAIL }); a.play(ANGRY, now, true); }));
@@ -691,7 +739,8 @@ export class BattleScreen {
   private applyHit(e: BattleEvent, t: Fighter, a: Fighter, now: number) {
     switch (e.result) {
       case "dodge": {
-        // 闪避：往旁边一闪再回来
+        // 闪避：往旁边一闪再回来（SE 8）
+        sfx(8, t.x);
         const hx = t.x, hy = t.y;
         this.popup(t, now, { icon: CG.ICON_MISS });
         t.x = hx - 24; t.y = hy - 18;
@@ -699,14 +748,17 @@ export class BattleScreen {
         return;
       }
       case "miss":
+        sfx(8, t.x);
         this.popup(t, now, { icon: CG.ICON_MISS });
         break;
       case "guard":
+        sfx(damageSe(a.hitMarker), t.x);
         this.popup(t, now, { icon: CG.ICON_GUARD });
         this.hitMark(t, now, true, false);
         t.play(ANIM.GUARD, now);
         break;
       default:
+        sfx(damageSe(a.hitMarker), t.x);
         this.hitMark(t, now, e.guarded, e.result === "critical");
         this.popup(t, now, { text: String(e.damage), color: e.result === "critical" ? FONT.YELLOW : FONT.RED });
         if (e.mpDamage > 0) this.popup(t, now, { text: String(e.mpDamage), color: FONT.YELLOW, dy: 14 });
@@ -765,7 +817,29 @@ export class BattleScreen {
     if (fade > 0) ui.box(0, 0, 800, 600, `rgba(0,0,0,${fade.toFixed(2)})`, true);
   }
 
+  /** 快速战斗的一帧：播完排队的动画（静音、快进），轮到下指令就马上照战斗设定下；打完回到地图。只在画面上方写一行字 */
+  quickFrame(now: number) {
+    if (this.queue.length > 0) {
+      const mute = sfx;
+      setSfx(() => {});
+      let t = Math.max(this.clock, now), n = 0;
+      try {
+        while (this.queue.length > 0 && n++ < 200000) { if (this.queue[0](t)) this.queue.shift(); else t += 50; }
+      } finally { setSfx(mute); }
+      this.queue.length = 0;
+      this.clock = t;
+      this.fx = [];
+    }
+    if (this.end) { this.host.finish(this.end); return; }
+    if (this.menuAt === 0 && !(this.surprise === 2 && this.turns === 0)) this.openMenu(now);
+    if (this.menuAt > 0 && !this.sent) this.autoCommand();
+    const label = `快速战斗中…　第 ${this.turns + 1} 回合`, ui = this.host.ui;
+    ui.box(400 - 90, 40, 400 + 90, 62, "rgba(0,0,0,0.6)", true);
+    ui.texts.push({ x: 400, y: 44, text: label, color: FONT.YELLOW, align: "center" });
+  }
+
   private openMenu(now: number) {
+
     const me = this.fighters.get(this.me);
     if (!me || me.gone) return;
     this.menuAt = now; this.deadline = now + this.turnMs;
@@ -1107,10 +1181,26 @@ export class BattleScreen {
     }
     const pet = this.myPet();
     const [floor, gx, gy] = this.host.place();
-    const cmd = aiChoose(this.host.aiSettings(), {
-      me: this.me, first: this.aiFirst, fighters, inv: this.host.inventory().items,
-      petSkills: pet ? pet.info.skills : null, capturePlace: floor !== 500 || (gx >= 250 && gy >= 360),
-    });
+    const s = this.host.aiSettings(), capturePlace = floor !== 500 || (gx >= 250 && gy >= 360);
+    let cmd;
+    if (s.other[2]) {
+      const sf = new Map<number, SmartFighter>();
+      for (const [slot, a] of this.fighters) {
+        sf.set(slot, { slot, name: a.f.name, hp: a.dead ? 0 : a.hp, maxHp: a.f.maxHp, mp: a.mp, level: a.f.level, status: a.status, gone: a.gone || a.hidden });
+      }
+      const sc = smartChoose(s, {
+        me: this.me, first: this.aiFirst, fighters: sf, inv: this.host.inventory().items, myAtk: this.host.myAtk(),
+        pet: pet ? { name: pet.info.freeName || pet.info.name, atk: pet.info.atk, skills: pet.info.skills } : null,
+        capturePlace, noEscape: this.pvp || this.event, mem: this.host.aiMemory(),
+      });
+      this.aiKey = sc.key; this.aiPetKey = sc.petKey;
+      cmd = sc;
+    } else {
+      cmd = aiChoose(s, {
+        me: this.me, first: this.aiFirst, fighters, inv: this.host.inventory().items,
+        petSkills: pet ? pet.info.skills : null, capturePlace,
+      });
+    }
     this.aiFirst = false;
     for (const t of cmd.chat) this.host.chat(t, FONT.WHITE);
     this.aiLabel = cmd.label;

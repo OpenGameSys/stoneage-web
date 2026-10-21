@@ -79,7 +79,9 @@ func (w *World) warpmanTalk(p, n *entity, talk string) {
 		w.newWarpmanOpen(p, n, talk)
 		return
 	}
-	// 还没有组队，NPC_PARTY_CHAECK 一定通过
+	if !w.warpPartyOK(p, n, arg) { // NPC_PARTY_CHAECK：组队中不能用传送员
+		return
+	}
 	if rt := w.checkWarpMsg(p, n, arg, talk); rt != 0 {
 		if rt == 1 {
 			if msg, ok := data.ArgField(arg, "nomal_msg"); ok {
@@ -100,6 +102,10 @@ func (w *World) checkWarpMsg(p, n *entity, arg, talk string) int {
 	if word != talk {
 		return 1
 	}
+	// 说对了暗语：参数写了 CHECKPARTY（不是 FALSE）才检查组队（旧式传送员在说话时已经查过）
+	if cp, ok := data.ArgField(arg, "CHECKPARTY"); ok && !strings.Contains(cp, "FALSE") && !w.warpPartyOK(p, n, arg) {
+		return 2
+	}
 	free, ok := data.ArgField(arg, "FREE")
 	if !ok {
 		return 2
@@ -118,6 +124,31 @@ func (w *World) checkWarpMsg(p, n *entity, arg, talk string) int {
 	}
 	w.warpByArg(p, arg)
 	return 4
+}
+
+// warpPartyOK 是 NPC_PARTY_CHAECK + NPC_ERR_DiSP(1)：组队中（队长或队员）不能用传送员，发 PartyMsg 窗口
+// （没写时是"无法加入团队。请解散团队。"）；队长问的时候全队都收到，队员问的时候只有自己。
+func (w *World) warpPartyOK(p, n *entity, arg string) bool {
+	if p.party == nil {
+		return true
+	}
+	msg, ok := data.ArgField(arg, "PartyMsg")
+	if !ok || msg == "" {
+		msg = "\n\n　　　　无法加入团队。　　\n\n　　　 请解散团队 。　"
+	}
+	to := []*entity{p}
+	if p.isLeader() {
+		to = to[:0]
+		for _, m := range p.party.slots {
+			if m != nil {
+				to = append(to, m)
+			}
+		}
+	}
+	for _, m := range to {
+		w.sendWindow(m, n, "message", BtnOK, seqWarpManErr, npcText(msg))
+	}
+	return false
 }
 
 // warpmanOpen 是 NPC_WarpMan_selectWindow：符合 FREE 条件时显示 FreeMsg（免费），否则显示 PayMsg（MONEY 是价钱，
@@ -245,9 +276,16 @@ func (w *World) warpmanReply(p, n *entity, win *npcWindow, button int) {
 			}
 			return
 		}
+		// NEW_WARPMAN：按"是"时检查组队，参数 CHECKPARTY 写 FALSE 的不查
+		if cp, _ := data.ArgField(arg, "CHECKPARTY"); !strings.Contains(cp, "FALSE") && !w.warpPartyOK(p, n, arg) {
+			return
+		}
 	} else if button != BtnYes {
 		return // 只有 OK 的说明窗口回传不到这里（NpcWindowReply 只认窗口上有的按钮）
+	} else if !w.warpPartyOK(p, n, arg) { // WARP_MAN：按"是"时再查一次组队（打开窗口后才组的队）
+		return
 	}
+
 	// 免费通过的要在这时再检查一次条件：打开窗口之后可能已经把门票丢了（服务端权威，原版没有重新检查）。
 	// 钱不够要在交出道具之前就挡下（原版先 DelItem 再检查金钱，钱不够时道具已经被收走）。
 	if win.cost < 0 {

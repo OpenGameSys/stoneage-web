@@ -138,13 +138,18 @@ func (w *World) settlePet(e *entity, ft *fight) {
 }
 
 // settleRecalled 是收回宠物时的 BATTLE_Exit：HP 写回（倒下的回到 1）、累计的忠诚度变动与倒下的惩罚；
-// 打倒敌人的经验与忠诚度要到战斗结束时还在场才拿得到（BATTLE_AddExp），收回的宠物打倒的敌人不再算给这个位置。
+// 打倒敌人的经验与忠诚度要到战斗结束时还在场才拿得到（BATTLE_AddExp），收回的宠物打倒的敌人不再算给这个位置；
+// 经验共享时改算在主人名下（经验还是大家一起拿，忠诚度不给新叫出来的那只）。
 func (w *World) settleRecalled(e *entity, ft *fight, pf *battle.Fighter) {
 	for _, f := range ft.b.F {
 		if f != nil && f.Enemy() && f.KilledBy == pf.Slot {
 			f.KilledBy = -1
+			if w.Rules.ShareExp {
+				f.KilledBy = ft.slot
+			}
 		}
 	}
+
 	if ft.pet < 0 || e.pets.Pets[ft.pet] == nil {
 		return
 	}

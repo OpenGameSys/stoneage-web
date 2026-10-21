@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,7 +22,10 @@ const (
 	MaxLevel = 140
 	// LevelUpPoints：每升一级得到的点数（battle.c：没有 _SKILLUPPOINT_CF 时为 3）。
 	LevelUpPoints = 3
+	// minDefQuick 是装备加减后防御力与敏捷的下限（item.c ITEM_equipEffect：max(-100, work)；攻击力是 max(0, work)）。
+	minDefQuick = -100
 	// CharmPerLevel：升级时魅力增加（CH_FIX_PLAYERLEVELUP），上限 100。
+
 	CharmPerLevel = 2
 )
 
@@ -89,7 +93,7 @@ func (w *World) rollEncounter(e *entity) {
 		return
 	}
 	e.cep = max(a.ProbMin, min(a.ProbMax, e.cep))
-	if w.rnd.IntN(EncounterDivisor) < e.cep {
+	if float64(w.rnd.IntN(EncounterDivisor)) < float64(e.cep)*w.Rules.EncounterRate { // 遇敌率倍率（rules.encounterRate）
 		e.cep = a.ProbMin
 		w.startBattle(e, a)
 	} else if e.cep < a.ProbMax {
@@ -105,6 +109,7 @@ func (w *World) startBattle(e *entity, a *data.EncountArea) {
 	}
 	enemies := make([]*battle.Fighter, len(specs))
 	for i, s := range specs {
+		s.DropRate = w.Rules.DropRate
 		enemies[i] = battle.NewEnemy(s, battle.EnemySlot(i), w.game.Battle.Skills, w.rnd)
 	}
 	w.startBattleWith(e, enemies, nil, nil)
@@ -145,7 +150,7 @@ func (w *World) startBattleWith(e *entity, enemies []*battle.Fighter, npc *entit
 	}
 	surprise := 0 // 1 偷袭成功（敌人第一回合不动），2 被偷袭（自己第一回合不动）
 	if onEnd == nil {
-		surprise = b.Surprise(e.luck)
+		surprise = b.Surprise(e.char.Luck)
 	}
 	field := w.battleField(e)
 	room.field = field
@@ -179,7 +184,8 @@ func (w *World) joinRoom(room *battleRoom, m *entity, slot int) {
 // sendBattleStart 送 m 这场战斗的全部人（BATTLE_CharSendOne 的 B| 字串开头）。
 func (w *World) sendBattleStart(m *entity, field, surprise int) {
 	b := m.fight.b
-	msg := &proto.BattleStart{Field: field, MySlot: m.fight.slot, TurnTime: int(TurnTime / time.Millisecond), Surprise: surprise, Pvp: m.fight.room.pvp}
+	msg := &proto.BattleStart{Field: field, MySlot: m.fight.slot, TurnTime: int(w.Rules.TurnTime / time.Millisecond), Surprise: surprise, Pvp: m.fight.room.pvp,
+		Event: m.fight.room.npc != nil} // eventEnemyFlag：NPC 开的战斗（客户端放头目的战斗音乐）
 	for _, f := range b.F {
 		if f != nil {
 			msg.Fighters = append(msg.Fighters, w.fighterInfo(m.fight.room, f))
@@ -221,15 +227,17 @@ type workStats struct {
 func (w *World) stats(e *entity) workStats {
 	c := e.char
 	d := battle.Derive(float64(c.Vital*100), float64(c.Str*100), float64(c.Tgh*100), float64(c.Dex*100))
-	s := workStats{Atk: d.Atk, Def: d.Def, Quick: d.Quick, MaxHP: d.HP, MaxMP: 100, Charm: c.Charm, Luck: max(1, e.luck),
+	s := workStats{Atk: d.Atk, Def: d.Def, Quick: d.Quick, MaxHP: d.HP, MaxMP: 100, Charm: c.Charm, Luck: max(1, e.char.Luck),
 		Attr: [4]int{c.Earth * 10, c.Water * 10, c.Fire * 10, c.Wind * 10}}
 	if e.inv == nil {
 		return s
 	}
 	mods, attr := w.equipMods(e.inv[:data.EquipSlots], [5]int{d.Atk, d.Def, d.Quick, d.HP, 100})
+	// ITEM_equipEffect：攻击力最少 0，防御力与敏捷最少 -100（会是负数，状态窗口照样显示负数）
 	s.Atk = max(0, s.Atk+mods[data.ModAtk])
-	s.Def = max(0, s.Def+mods[data.ModDef])
-	s.Quick = max(0, s.Quick+mods[data.ModQuick])
+	s.Def = max(minDefQuick, s.Def+mods[data.ModDef])
+	s.Quick = max(minDefQuick, s.Quick+mods[data.ModQuick])
+
 	s.MaxHP = max(1, s.MaxHP+mods[data.ModHP])
 	s.MaxMP = max(0, min(1000, s.MaxMP+mods[data.ModMP]))
 	s.Luck = max(1, min(5, s.Luck+mods[data.ModLuck]))
@@ -279,7 +287,7 @@ func (w *World) armTurnTimer(room *battleRoom, events int) {
 		room.timer.Stop()
 	}
 	turn := room.turn
-	d := TurnTime + time.Duration(events)*1500*time.Millisecond + 5*time.Second
+	d := w.Rules.TurnTime + time.Duration(events)*1500*time.Millisecond + 5*time.Second
 	room.timer = time.AfterFunc(d, func() {
 		w.Do(func() {
 			if room.turn == turn && len(room.members) > 0 {
@@ -299,7 +307,14 @@ func (w *World) BattleCommand(charID int, kind string, target, item int) {
 		}
 		c := battle.Command{Kind: battle.Kind(kind), Target: target}
 		switch c.Kind {
-		case battle.Attack, battle.Guard, battle.Escape, battle.None, battle.Capture:
+		case battle.Escape:
+			// battle_command.c _NOT_ESCAPE：NOTESCAPE 的楼层逃不掉，改成防御
+			if slices.Contains(w.Rules.NoEscapeFloors, e.floor) {
+				w.sysMsg(e, "大魔王使出定身法，定定定定定定把你定在战斗里。", colorYellow)
+				c.Kind = battle.Guard
+			}
+		case battle.Attack, battle.Guard, battle.None, battle.Capture:
+
 		case battle.UseItem:
 			// lssproto_B 的 "I|格位|目标"：目标要合道具的种类（ITEM_isTargetValid）；地图专用的道具由客户端挡（原版服务端不查）
 			var def *data.ItemDef
@@ -521,21 +536,16 @@ func (w *World) endMember(e *entity, win int) string {
 	}
 	res.Pets = []proto.PetResult{}
 	if res.Result == "win" && !pvp { // PvP 没有经验、石币与道具（dpbattle：改算 DP）
-		// BATTLE_AddExp：经验给打倒敌人的那个人（玩家或宠物），战斗结束时还活着的才拿得到
-		petExp := e.addExp.boost(w.petKillExp(ft)) // 宠物用主人的智慧之果
+		// 战斗结束时还活着的才拿得到经验（三份怎么算见 battleExp）
+		charExp, petExp, rideExp := w.battleExp(e, ft)
 		if p.HP > 0 {
-			for _, f := range ft.b.F {
-				if f != nil && f.Enemy() && f.HP <= 0 && f.KilledBy == ft.slot {
-					res.Exp += battle.KillExp(f.Exp, c.Level, f.Level)
-				}
-			}
-			res.Exp = e.addExp.boost(res.Exp) // 智慧之果（BATTLE_GetExp 的 FreeModeExp）
+			res.Exp = charExp
 			res.LevelUp = w.gainExp(c, res.Exp)
 			res.Items = w.giveDrops(e, ft.b)
 		}
 		res.Pets = w.petResult(e, ft, petExp)
 		if p.HP > 0 {
-			res.Pets = append(res.Pets, w.rideResult(e, ft)...)
+			res.Pets = append(res.Pets, w.rideResult(e, ft, rideExp)...)
 		}
 	}
 	w.settleRide(e, ft)
@@ -571,7 +581,49 @@ func (w *World) endMember(e *entity, win int) string {
 	return res.Result
 }
 
+// battleExp 是这场的三份经验：人物、出战宠物、骑宠（都乘上了经验倍率 rules.expRate）。
+//
+// 原版 BATTLE_AddExp（rules.shareExp: false）：各拿自己打倒的敌人，按各自与敌人的等级差折算（KillExp）；
+// 人物与宠物再乘智慧之果（宠物用主人的），骑宠是骑着时打倒的、按骑宠的等级折算后 × 0.6。
+//
+// 经验共享（额外新功能，预设）：人物、出战宠物（含中途收回的那只打倒的）、骑宠打倒的敌人全部加起来，
+// 按战斗结束时还在场的三者里最低的等级折算、乘智慧之果，三者都拿这么多（不是平分）。
+func (w *World) battleExp(e *entity, ft *fight) (char, pet, ride int) {
+	f := ft.b.F[ft.slot]
+	var rp *Pet
+	if f.Ride != nil && !f.Ride.Fell && e.pets.Ride >= 0 {
+		rp = e.pets.Pets[e.pets.Ride]
+	}
+	if w.Rules.ShareExp {
+		level := e.char.Level
+		if pf := ft.b.F[ft.slot+5]; ft.pet >= 0 && pf != nil && pf.Alive() {
+			level = min(level, pf.Level)
+		}
+		if rp != nil {
+			level = min(level, rp.Level)
+		}
+		total := 0
+		for _, x := range ft.b.F {
+			if x != nil && x.Enemy() && x.HP <= 0 && (x.KilledBy == ft.slot || x.KilledBy == ft.slot+5) {
+				total += battle.KillExp(x.Exp, level, x.Level)
+			}
+		}
+		n := e.addExp.boost(w.Rules.scaleExp(total))
+		return n, n, n
+	}
+	for _, x := range ft.b.F {
+		if x != nil && x.Enemy() && x.HP <= 0 && x.KilledBy == ft.slot {
+			char += battle.KillExp(x.Exp, e.char.Level, x.Level)
+			if rp != nil && x.KilledRide {
+				ride += int(float64(battle.KillExp(x.Exp, rp.Level, x.Level)) * 0.6)
+			}
+		}
+	}
+	return e.addExp.boost(w.Rules.scaleExp(char)), e.addExp.boost(w.Rules.scaleExp(w.petKillExp(ft))), w.Rules.scaleExp(ride)
+}
+
 // gainExp 加经验并检查升级，返回升了几级（CHAR_LevelUpCheck）：
+
 // 每升一级 +3 点、魅力 +2（上限 100）、DP +（新等级 × 10）。
 func (w *World) gainExp(c *store.Character, exp int) int {
 	c.Exp += exp
@@ -585,7 +637,7 @@ func (w *World) gainExp(c *store.Character, exp int) int {
 		c.Level++
 		ups++
 	}
-	c.Points += ups * LevelUpPoints
+	c.Points += ups * w.Rules.LevelUpPoints
 	c.Charm = min(100, c.Charm+ups*CharmPerLevel)
 	return ups
 }
@@ -686,9 +738,15 @@ func (w *World) abandonBattle(e *entity) {
 		return
 	}
 	room := ft.room
+	if room.pvp {
+		// CHAR_logout：决斗中下线 = BATTLE_EscapeDpSend（扣 DP 的 2 成给对方还站着的人平分），DP 马上记上
+		w.duelEscape(room, e)
+		e.char.DP = max(0, min(maxDuelPoint, e.char.DP+ft.dp))
+	}
 	room.removeMember(e)
 	p := ft.b.F[ft.slot]
 	p.Escaped = true
+
 	if pf := ft.b.F[ft.slot+5]; pf != nil {
 		pf.Escaped = true
 	}

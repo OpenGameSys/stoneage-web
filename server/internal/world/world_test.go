@@ -573,3 +573,23 @@ func TestBattleDrops(t *testing.T) {
 		t.Fatalf("应拿到 3 件战利品：%v", names)
 	}
 }
+
+// 装备让防御力、敏捷变成负数时照原版（ITEM_equipEffect）保留负数，最低 -100；攻击力最低 0。
+func TestNegativeDefQuick(t *testing.T) {
+	w, db, _ := setup(t)
+	c := newChar(t, db, "weak", 1000, 47, 82)
+	w.Enter(c, &fakeClient{})
+	w.Do(func() {
+		e := w.players[int(c.ID)]
+		def := &data.ItemDef{ID: -1, Name: "test", Type: data.ItemAxe, Durability: 0}
+		it := w.newItem(def)
+		it.Mods[data.ModDef], it.Mods[data.ModQuick], it.Mods[data.ModAtk] = -3, -500, -500
+		w.game.Items[-1] = def
+		defer delete(w.game.Items, -1)
+		e.inv[data.SlotArm] = it
+		s := w.stats(e)
+		if s.Def >= 0 || s.Quick != -100 || s.Atk != 0 {
+			t.Errorf("防御 %d（应为负）、敏捷 %d（应为 -100）、攻击 %d（应为 0）", s.Def, s.Quick, s.Atk)
+		}
+	})
+}

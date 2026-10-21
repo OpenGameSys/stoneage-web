@@ -4,11 +4,12 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"slices"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -24,6 +25,8 @@ const (
 	StepBurst    = 3                      // 允许网络抖动造成的连续快步数
 	MaxMapReq    = 64                     // 一次 MapReq 的最大边长
 	MaxChatRunes = 120
+	// worldChatGap：世界频道两句之间要超过这么久（CHAR_WORKWORLDSENDTIME，原版 > 5 秒）
+	worldChatGap = 5 * time.Second
 	SaveInterval = 30 * time.Second
 	// 多久按 SA 时间检查一次 TimeMan 的图（原版是周围有人动作时 NPC_TimeManWatch 检查；一个 SA 时约 5.3 秒）
 	timeManInterval = 5 * time.Second
@@ -61,22 +64,25 @@ type entity struct {
 	visible          map[int]bool // 玩家当前能看到的实体
 	stepTokens       float64
 	lastStep         time.Time
-	npc              *data.NPC          // NPC 才有：对话行为与内容
-	cep              int                // 遇敌值（原版 CONNECT_get_CEP）
-	luck             int                // 运气 1..5，上线时抽（CHAR_setLuck）
-	fight            *fight             // 战斗中
-	window           *npcWindow         // 打开中的 NPC 窗口
-	inv              *inventory         // 道具与装备
-	pets             *petBag            // 宠物栏（pet.go）
-	magic            *battle.MagicSkill // 魔法熟练度与抗魔（characters.magic）
-	noenemy          int                // 驱魔（ITEM_useNoenemy）：剩下的分钟数，> 0 不遇敌（原版记在连线上，不存档）
-	stay             bool               // 原地遇敌（ITEM_useEncounter / UseDeathCounter），走动或传送就取消
-	water            int                // 水中呼吸剩下的分钟数（鱼鳃草，CHAR_WORKSTATUSWATER，不存档）
-	lastMerge        int64              // 上次加工 / 料理的时间（CHAR_WORKLASTMERGETIME，unix 秒）
-	ground           *ground            // 地上的道具 / 石币 / 宠物才有（ground.go）
-	addExp           addExp             // 智慧之果（itemuse.go）
-	metamo           *metamoState       // 变身中（itemuse.go）
-	level            int                // 地上的宠物的等级（滑鼠停着时显示）
+	npc              *data.NPC // NPC 才有：对话行为与内容
+	cep              int       // 遇敌值（原版 CONNECT_get_CEP）
+	gm               bool      // 账号在 World.GMs 里（上线时定）
+	muteUntil        time.Time // GM 的 /mute：这之前不能说话（不存档）
+	worldSentAt      time.Time // 上次在世界频道说话（CHAR_WORKWORLDSENDTIME）
+
+	fight     *fight             // 战斗中
+	window    *npcWindow         // 打开中的 NPC 窗口
+	inv       *inventory         // 道具与装备
+	pets      *petBag            // 宠物栏（pet.go）
+	magic     *battle.MagicSkill // 魔法熟练度与抗魔（characters.magic）
+	noenemy   int                // 驱魔（ITEM_useNoenemy）：剩下的分钟数，> 0 不遇敌（原版记在连线上，不存档）
+	stay      bool               // 原地遇敌（ITEM_useEncounter / UseDeathCounter），走动或传送就取消
+	water     int                // 水中呼吸剩下的分钟数（鱼鳃草，CHAR_WORKSTATUSWATER，不存档）
+	lastMerge int64              // 上次加工 / 料理的时间（CHAR_WORKLASTMERGETIME，unix 秒）
+	ground    *ground            // 地上的道具 / 石币 / 宠物才有（ground.go）
+	addExp    addExp             // 智慧之果（itemuse.go）
+	metamo    *metamoState       // 变身中（itemuse.go）
+	level     int                // 地上的宠物的等级（滑鼠停着时显示）
 }
 
 // hidden：按时间出现的人不在的时候（图号 9999）看不到。
@@ -102,7 +108,11 @@ type World struct {
 	groundSeq, ticks int
 	partyWarping     bool // 正在把队员跟着队长传送
 	battleSeq        int  // 战斗的编号（地图上的战斗记号 CG_VS_MARK 按它轮换）
-	GM               bool // 允许调试指令（开发用，见 gm.go）
+	// GMs 是 config.yaml 的 gms：这些账号（登录用的账号名，不分大小写）上线的角色是 GM，
+	// 有 GM 指令选单、能用 GM 指令（gm.go）；别的玩家收不到选单，送来的指令也不执行
+	GMs map[string]bool
+	// Rules 是 config.yaml 的 rules（rules.go），开机时设定，之后只读
+	Rules Rules
 	// saves 是存档队列：由一个协程按顺序写库，保证同一角色的新存档不会被旧存档盖掉
 	saves   chan func()
 	started time.Time          // 开机时间（记录点报"本星球已经启动了…"）
@@ -120,7 +130,8 @@ func New(game *data.Game, db store.Store, log *slog.Logger, seed int64) *World {
 	w := &World{game: game, db: db, log: log, cmds: make(chan func(), 1024),
 		floors: map[int]map[int]*entity{}, players: map[int]*entity{}, now: time.Now,
 		rnd: rand.New(rand.NewPCG(uint64(seed), 1)), saves: make(chan func(), 4096), started: time.Now(),
-		quizzes: map[int]*quizState{}, wake: make(chan struct{}, 1)}
+		quizzes: map[int]*quizState{}, wake: make(chan struct{}, 1), Rules: DefaultRules()}
+
 	w.fam = NewFamilies(db, log)
 	go func() {
 		for f := range w.saves {
@@ -233,7 +244,7 @@ func (w *World) drain() {
 }
 
 // Families 回传这条线路用的家族资料；ShareFamilies 让几条线路共用同一份（cmd/saserver 在 Run 之前设定）。
-func (w *World) Families() *Families     { return w.fam }
+func (w *World) Families() *Families       { return w.fam }
 func (w *World) ShareFamilies(f *Families) { w.fam = f }
 
 // ---------------- 进入与离开 ----------------
@@ -253,8 +264,13 @@ func (w *World) Enter(c store.Character, cl Client) {
 		e := &entity{id: int(c.ID), kind: "player", name: c.Name, sprite: c.Sprite, floor: c.Floor, x: c.X, y: c.Y,
 			dir: c.Dir, client: cl, char: c, visible: map[int]bool{}, stepTokens: StepBurst}
 		w.players[e.id] = e
-		e.luck = battle.RollLuck(w.rnd)
+		w.setLuck(e)
+		if a, ok := cl.(interface{ Account() string }); ok {
+			e.gm = w.GMs[strings.ToLower(a.Account())]
+		}
 		e.inv = parseInventory(c.Items)
+		w.unequipProfession(e)
+
 		e.pets = parsePets(c.Pets)
 		e.magic = parseMagic(c.Magic)
 		e.addExp = parseAddExp(c.AddExp)
@@ -272,8 +288,63 @@ func (w *World) Enter(c store.Character, cl Client) {
 		w.notifyLoginLogout(e, true) // 名片上的在线
 		w.deliverStoredMails(e)      // MessageFlush
 		w.returnAwayPets(e)
-		w.log.Info("上线", "char", e.name, "floor", e.floor, "x", e.x, "y", e.y)
+		if e.gm {
+			cl.Send(&proto.GmMenu{Items: gmMenu})
+		}
+		w.log.Info("上线", "char", e.name, "floor", e.floor, "x", e.x, "y", e.y, "gm", e.gm)
 	})
+}
+
+// hasItemWhere：身上（装备与道具栏）有没有符合条件的道具。
+func (w *World) hasItemWhere(e *entity, ok func(*data.ItemDef) bool) bool {
+	for _, it := range e.inv {
+		if d := w.itemDef(it); d != nil && ok(d) {
+			return true
+		}
+	}
+	return false
+}
+
+// itemDef 是道具实例的定义（nil 安全）。
+func (w *World) itemDef(it *Item) *data.ItemDef {
+	if it == nil {
+		return nil
+	}
+	return w.game.Items[it.ID]
+}
+
+// dropItemsAtLogout 是 CHAR_dropItemAtLogout：下线时，身上（装备与道具栏）登出消失的道具（ITEM_DROPATLOGOUT）都消失。
+func (w *World) dropItemsAtLogout(e *entity) {
+	gone := false
+	for i, it := range e.inv {
+		if d := w.itemDef(it); d != nil && d.DropAtLogout {
+			e.inv[i] = nil
+			gone = true
+		}
+	}
+	if gone {
+		e.char.Items = e.inv.String()
+	}
+}
+
+// setLuck 是 CHAR_setLuck（上线时）：上次抽运气不是同一个 SA 日（RealTimeToLSTime 的年、日不同）才重抽，
+// 运气与抽的时间都存档，所以重新登录不会换运气。
+func (w *World) setLuck(e *entity) {
+	now := w.now().Unix()
+	if e.char.Luck >= 1 && e.char.LuckTime > 0 && saDayOf(e.char.LuckTime) == saDayOf(now) {
+		return
+	}
+	e.char.Luck, e.char.LuckTime = battle.RollLuck(w.rnd), now
+	w.saveProgress(e)
+}
+
+// saDayOf 是 Unix 秒所在的 SA 日（一天 5400 秒，从 saEra 起算）。
+func saDayOf(t int64) int64 {
+	d := t - saEra
+	if d < 0 {
+		return (d - saDay + 1) / saDay
+	}
+	return d / saDay
 }
 
 // Leave 让角色下线并存档。只有当前在线的正是这个连接时才生效：
@@ -289,6 +360,7 @@ func (w *World) Leave(charID int, cl Client) {
 func (w *World) leave(e *entity) {
 	w.abandonBattle(e)
 	w.cancelTrade(e)
+	w.dropItemsAtLogout(e)
 	w.leaveParty(e, true) // _CHAR_logout：CHAR_DischargeParty
 	w.removeFromFloor(e)
 	delete(w.players, e.id)
@@ -613,15 +685,39 @@ func (w *World) Chat(charID int, channel, text string, color, area int) {
 		if utf8.RuneCountInString(text) > MaxChatRunes {
 			text = string([]rune(text)[:MaxChatRunes])
 		}
-		if w.GM && strings.HasPrefix(text, "/") && w.gmCommand(e, text) {
+		if e.gm && strings.HasPrefix(text, "/") && w.gmCommand(e, text) {
 			return
 		}
+		if w.now().Before(e.muteUntil) {
+			w.sysMsg(e, fmt.Sprintf("你被禁言了，还有 %d 分钟。", int(e.muteUntil.Sub(w.now()).Minutes())+1), colorRed)
+			return
+		}
+
 		if color < 0 || color >= FontPalCount {
 			color = 0
 		}
 		msg := &proto.ChatMsg{Channel: channel, FromID: e.id, From: e.name, Text: text, Color: color}
 		switch channel {
 		case "world":
+			// char_talk.c _THE_WORLD_SEND：间隔 5 秒以上、转生与等级够、声望够（每句扣掉）才说得出去
+			now := w.now()
+			r := w.Rules
+			switch {
+			case now.Sub(e.worldSentAt) <= worldChatGap:
+				w.sysMsg(e, "每次使用世界频道需间隔五秒才能使用世界频道!", colorRed)
+				return
+			case e.char.Trans < r.WorldTrans || e.char.Level < r.WorldLevel:
+				w.sysMsg(e, "您的转生等级未达到要求,暂不能使用世界频道!", colorRed)
+				return
+			case e.char.Fame < r.WorldFame:
+				w.sysMsg(e, "您的声望不足,暂无法使用世界频道!", colorRed)
+				return
+			}
+			e.char.Fame -= r.WorldFame
+			e.worldSentAt = now
+			if r.WorldFame > 0 {
+				w.saveProgress(e)
+			}
 			for _, p := range w.players {
 				p.client.Send(msg)
 			}
@@ -715,11 +811,25 @@ func (w *World) ReturnHome(charID int) {
 		if e == nil {
 			return
 		}
-		if e.isFollower() {
-			w.sysMsg(e, "团队中无法回纪录点！", colorYellow) // lssproto_CharLogout_recv：队员不能回记录点，队长回就全队一起
+		// lssproto_CharLogout_recv（flg 1 回记录点，_CHAR_NEWLOGOUT）的检查，照原版的顺序
+		h := w.elderPos(e)
+		msg := ""
+		switch {
+		case e.party != nil && h.Floor == 30691: // _NO_TEAMWARP_SKYLAND
+			msg = "团队中无法回天空之岛！"
+		case e.fight != nil:
+			msg = "战斗中无法回纪录点！"
+		case w.hasItemWhere(e, func(d *data.ItemDef) bool { return d.Type == data.ItemWares }): // _ITEM_CHECKWARES
+			msg = "携带货物无法使用。"
+		case e.isFollower(): // 队员不能回记录点，队长回就全队一起
+			msg = "团队中无法回纪录点！"
+		case w.hasItemWhere(e, func(d *data.ItemDef) bool { return d.DropAtLogout }): // _ITEM_CHECKDROPATLOGOUT
+			msg = "携带的物品使你无法回纪录点！"
+		}
+		if msg != "" {
+			w.sysMsg(e, msg, colorYellow)
 			return
 		}
-		h := w.elderPos(e)
 		w.placeOnFloor(e, h.Floor, h.X, h.Y, e.dir)
 		w.save(e)
 	})

@@ -9,6 +9,8 @@
 // 按下送 "R|P|格位"，骑着时再按就下来；骑着的那只状态钮是 CG_PET_WND_RIDE_BTN（btnNo 195），点它就下来并改成休息。
 // 邮件宠物（pc.mailPetNo）只记在客户端，宠物邮件窗口（mail.ts）用它。没做的：
 // _PETCOM_ 成长计算（图 55218 不在这套资源里）；原版的音效（play_se）也还没有。
+// 扩展资料（额外新功能，extPanel）：一览页滑鼠停在名字上、或在详细资料页时，窗口右边列出服务端算好的 PetInfo.ext
+// （档次、成长率、预计 / 实际每级成长、1 级推算值、抗性等，算法见 server/internal/world/petext.go）。
 
 import type { PetInfo, PetSkill, S2CPets } from "./proto.gen.ts";
 import { ANIM, findAction } from "./assets.ts";
@@ -127,6 +129,7 @@ export class PetWindow {
       if (this.centerText(x + 3, y, p.freeName || p.name, color, nameId)) { this.sel = p.slot; this.page = 1; this.dir = 1; }
       if (ui.hovered(nameId)) {
         ui.bottomLine = "点名字看详细资料，按右键丢出宠物。";
+        this.extPanel(p, rects);
         // MOUSE_RIGHT_CRICK：丢出（_DROPPETWND 先问"确定要丢出你的宠物吗？"）
         if (ui.mouse.rightClicked && p.state !== "ride") this.host.drop(p.slot); // 骑着的不能丢
       }
@@ -224,6 +227,7 @@ export class PetWindow {
     rects.push([wx, wy, wx + 272, wy + 332]);
     ui.image(CG.PET_WND_DETAIL, wx + 136, wy + 166);
     this.drawPet(p);
+    if (!this.renameBox) this.extPanel(p, rects);
     const x = wx + 20;
     let y = wy + 35;
     const num = (v: number, w: number) => String(v).padStart(w, " ");
@@ -262,7 +266,44 @@ export class PetWindow {
     if (this.renameBox) this.renameWindow(rects);
   }
 
+  /**
+   * 扩展资料栏（像道具的说明窗口一样另开一个原版样式的窗口，在宠物窗口右边）。
+   * 成长是 ×100 的整数（攻、防、敏、HP）；实际每级成长比预计好的绿字、差的红字。
+   */
+  private extPanel(p: PetInfo, rects: [number, number, number, number][]) {
+    const ui = this.host.ui, x = this.ext.x, y = this.ext.y, ex = p.ext;
+    if (!ex) return;
+    const lines: [string, string][] = [];
+    const f = (v: number, i: number) => (v / 100).toFixed(i === 3 ? 1 : 2);
+    const four = (v: number[], fmt: (v: number, i: number) => string) => ["攻", "防", "敏", "血"].map((n, i) => `${n}${fmt(v[i] ?? 0, i)}`).join(" ");
+    lines.push([`档次 ${ex.rank}　捕获 ${ex.getLevel} 级　编号 ${ex.enemyId}`, FONT.WHITE]);
+    const bases = ["体", "腕", "耐", "敏"];
+    lines.push([`成长率 ${bases.map((n, i) => `${n}${ex.alloc[i] ?? 0}`).join(" ")}`, FONT.WHITE]);
+    if (ex.std.length === 4) lines.push([`标准　 ${bases.map((n, i) => `${n}${ex.std[i]}`).join(" ")}`, FONT.GRAY]);
+    if (ex.grow.length === 4) lines.push([`预计 ${four(ex.grow, f)}`, FONT.AQUA]);
+    if (ex.real.length === 4) {
+      const sum = (v: number[]) => v[0] + v[1] + v[2] + v[3] / 4; // 血大约是其他的 4 倍
+      lines.push([`实际 ${four(ex.real, f)}`, sum(ex.real) >= sum(ex.grow) ? FONT.GREEN : FONT.RED]);
+    } else lines.push(["实际 （捕获后还没升过级）", FONT.GRAY]);
+    if (ex.init.length === 4) lines.push([`1 级 ${four(ex.init, (v) => String(v))}`, FONT.WHITE]);
+    lines.push([`抗性 ${["毒", "麻", "眠", "石", "醉", "乱"].map((n, i) => `${n}${ex.resist[i] ?? 0}`).join(" ")}`, FONT.WHITE]);
+    lines.push([`会心 ${ex.critical}　反击 ${ex.counter}　稀有 ${ex.rare}`, FONT.WHITE]);
+    lines.push([`忠诚变动 ${ex.vai >= 0 ? "+" : ""}${ex.vai}　忠诚度 ${p.loyalty}`, FONT.WHITE]);
+    if (ex.magic.length === 8) {
+      const el = ["地", "水", "火", "风"];
+      lines.push([`魔法 ${el.map((n, i) => `${n}${ex.magic[i]}`).join(" ")}`, FONT.YELLOW]);
+      lines.push([`抗魔 ${el.map((n, i) => `${n}${ex.magic[4 + i]}`).join(" ")}`, FONT.YELLOW]);
+    }
+    const th = Math.ceil((lines.length * 21 + 50) / 48);
+    ui.window(x, y, 4, th, "pet-ext");
+    rects.push([x, y, x + 256, y + th * 48]);
+    ui.text(x + 18, y + 16, `${p.freeName || p.name}  LV${p.level}`, FONT.YELLOW);
+    lines.forEach(([l, c], i) => ui.text(x + 18, y + 40 + i * 21, l, c));
+  }
+  private readonly ext = { x: 280, y: 4 };
+
   /** ANIM_DISP_PET：站立动画循环播放（pattern ANM_NOMAL_SPD），点一下宠物转一个方向（anim_ang++） */
+
   private drawPet(p: PetInfo) {
     const ui = this.host.ui, now = performance.now();
     const lizard = LIZARDS.includes(p.sprite);

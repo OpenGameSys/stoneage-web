@@ -8,10 +8,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,13 +24,19 @@ import (
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	level := new(slog.LevelVar)
+	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	cfg, cfgPath, err := loadConfig()
 	if err != nil {
 		log.Error("读取设定失败", "file", cfgPath, "err", err)
 		os.Exit(1)
 	}
-	log.Info("设定", "file", cfgPath, "addr", cfg.Addr, "gm", cfg.GM)
+	if err := level.UnmarshalText([]byte(cfg.Log)); err != nil {
+		log.Error("log 要是 debug / info / warn / error", "log", cfg.Log)
+		os.Exit(1)
+	}
+	rules, _ := cfg.Rules.world() // loadConfig 检查过了
+	log.Info("设定", "file", cfgPath, "addr", cfg.Addr, "gms", cfg.GMs, "maxChars", cfg.MaxChars, "rules", fmt.Sprintf("%+v", cfg.Rules))
 	start := time.Now()
 	game, err := data.Load(cfg.Data)
 	if err != nil {
@@ -51,12 +59,18 @@ func main() {
 	var lines []*server.Line
 	var wg sync.WaitGroup
 	var families *world.Families // 家族是所有线路共用的（原版放在帐号服务器 AC）
+	gms := map[string]bool{}
+	for _, a := range cfg.GMs {
+		gms[strings.ToLower(strings.TrimSpace(a))] = true
+	}
 	for _, group := range cfg.Groups {
 		gname := group.Name
 		for _, n := range group.Lines {
 			id := len(lines) + 1
 			w := world.New(game, db, log.With("line", gname+n), int64(id))
-			w.GM = cfg.GM
+			w.GMs = gms
+			w.Rules = rules
+
 			if families == nil {
 				families = w.Families()
 			}
@@ -71,7 +85,8 @@ func main() {
 	go func() { wg.Wait(); close(worldDone) }()
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws", &server.Server{Lines: lines, Store: db, Log: log, Origins: cfg.Origins})
+	mux.Handle("/ws", &server.Server{Lines: lines, Store: db, Log: log, Origins: cfg.Origins, MaxChars: cfg.MaxChars})
+
 	mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(cfg.Assets))))
 	// 客户端页面与脚本要求每次校验（no-cache），改完代码刷新即生效；资源文件不变，交给浏览器缓存
 	clientFiles := http.FileServer(http.Dir(cfg.Client))

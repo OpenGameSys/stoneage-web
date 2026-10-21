@@ -175,6 +175,9 @@ function num(ui: Ui, x: number, y: number, v: number, width: number) {
   ui.text(x + (width - s.length) * 7, y, s, FONT.WHITE);
 }
 
+// 一页两个角色位（原版的画面）；服务端的 maxChars 超过 2 时可以翻页（额外新功能，原版固定 2 个），翻到哪一页记着，建完角色回来还在那页。
+let charPage = 0;
+
 export class CharSelectScreen implements Screen {
   private app: App;
   constructor(app: App) { this.app = app; }
@@ -182,8 +185,20 @@ export class CharSelectScreen implements Screen {
   frame() {
     const ui = this.app.ui, ix = OX, iy = OY;
     ui.image(CG.CHR_SEL_BG, 400, 300);
+    const pages = Math.max(1, Math.ceil(Math.max(this.app.maxChars, this.app.chars.length) / 2));
+    charPage = Math.min(charPage, pages - 1);
+    if (pages > 1) {
+      // 翻页：箭头放在背景图两侧的黑边上（借用宠物窗口的上一只 / 下一只钮），页数写在背景图上方
+      if (charPage > 0 && ui.button(CG.PREV_BTN, ix - 30, 300, "chr-prev", CG.PREV_BTN + 1)) charPage--;
+      if (charPage < pages - 1 && ui.button(CG.NEXT_BTN, 800 - ix + 30, 300, "chr-next", CG.NEXT_BTN + 1)) charPage++;
+      if (ui.hovered("chr-prev") || ui.hovered("chr-next")) ui.bottomLine = "翻到别的角色位。";
+      const label = `角色位 第 ${charPage + 1} / ${pages} 页`;
+      ui.text(400 - measure(label) / 2, iy - 30, label, FONT.YELLOW);
+
+    }
     for (let i = 0; i < 2; i++) {
-      const c = this.app.chars[i], px = i * 304 + ix;
+      const k = charPage * 2 + i;
+      const c = this.app.chars[k], px = i * 304 + ix;
       if (c) {
         ui.image(c.face, 169 + px, 84 + iy);
         const w = measure(c.name);
@@ -202,7 +217,8 @@ export class CharSelectScreen implements Screen {
           this.app.confirm(`确定要删除「${c.name}」吗？`, (yes) => { if (yes) this.app.net?.send({ t: "CharDelete", id: c.id }); });
         if (ui.hovered(`login${i}`)) ui.bottomLine = "用这个人物进行游戏。";
         if (ui.hovered(`del${i}`)) ui.bottomLine = "删除这个人物。";
-      } else if (i < this.app.maxChars) {
+      } else if (k < this.app.maxChars) {
+
         if (ui.button(CG.CHR_SEL_NEW_BTN, 160 + px, 342 + iy, `new${i}`)) this.app.go(new MakeSelectScreen(this.app));
         if (ui.hovered(`new${i}`)) ui.bottomLine = "制作新的人物。";
       }

@@ -4,7 +4,8 @@
 //   方向 0..7 的格子位移 = moveAddTbl；0 朝下，2 朝左，4 朝上，6 朝右
 
 import { album } from "./album.ts";
-import { ANIM, findAction, type Assets } from "./assets.ts";
+import { ANIM, findAction, type AnimAction, type Assets } from "./assets.ts";
+import { sfx } from "./audio.ts";
 import type { Connection } from "./net.ts";
 import type { ObjInfo, S2CEnterFloor, S2CMapData } from "./proto.gen.ts";
 import type { Quad } from "./renderer.ts";
@@ -37,6 +38,13 @@ export class Actor {
   }
 
   moving(now: number) { return now - this.stepAt < STEP_MS; }
+
+  /** 这一帧变成当前帧时，帧事件 1..9999 是音效（pattern.cpp：play_se(SoundNo, 位置)），Field.build 按画面座标放出来 */
+  se = 0;
+  private frameSe(act: AnimAction) {
+    const ev = act.frames[this.frame]?.[3] ?? 0;
+    if (ev > 0 && ev < 10000) this.se = ev;
+  }
 
   /**
    * 走一格。chain：紧接着上一步连续走时，新的一步从上一步结束的时刻算起（不是从这一帧），
@@ -76,13 +84,14 @@ export class Actor {
     const want = walking ? ANIM.WALK : this.act >= 0 ? this.act : ANIM.STAND;
     const act = findAction(def, this.dir, want);
     if (!act || act.frames.length === 0) return null;
-    if (act !== this.action) { this.action = act; this.frame = 0; this.frameAt = now; }
+    if (act !== this.action) { this.action = act; this.frame = 0; this.frameAt = now; this.frameSe(act); }
     const ms = Math.max(1, act.ticks) * (1000 / 60);
     const loop = walking || this.act < 0 || LOOP_ACTS.has(this.act); // ANM_LOOP / ANM_NO_LOOP
     if (now - this.frameAt > ms * 30) this.frameAt = now; // 长时间没画（切后台）时不追帧
     while (now - this.frameAt >= ms) {
       if (!loop && this.frame >= act.frames.length - 1) { this.frameAt = now; break; } // 停在最后一格
       this.frame = (this.frame + 1) % act.frames.length; this.frameAt += ms;
+      this.frameSe(act);
     }
     const [img, fx, fy] = act.frames[this.frame];
     return img < 0 ? null : [img, fx, fy];
@@ -335,7 +344,13 @@ export class Field {
     return this.walk[y * this.width + x] >= 2;
   }
 
+  /** 可以走、而且不是传送点（自动遇敌来回走的格子） */
+  plainWalkable(x: number, y: number): boolean {
+    return this.canEnter(x, y) && this.walk[y * this.width + x] === 2;
+  }
+
   update(now: number) {
+
     const s = this.self;
     if (!s || this.floor < 0 || this.waitingWarp || s.moving(now)) { this.requestView(); return; }
     if (this.follower) {
@@ -451,6 +466,33 @@ export class Field {
 
   // ---------------- 渲染 ----------------
 
+  /**
+   * 地图上的声音记号（map.cpp drawMap：编号 ≤ 99 的地块 / 物件不画，20..39 是环境音、40..59 是背景音乐）。
+   * 范围是自己附近的 37×37 格（gx − 20 .. gx + 16、gy − 16 .. gy + 20，原版读进来的地图范围，不只是画面）。
+   * 背景音乐记号有好几格时，原版最后看到的那格算数：画面上最上面、同一排最左边的那格。
+   */
+  soundMarkers(now: number, W = 800, H = 600): { bgm: number; env: { marker: number; x: number; y: number }[] } {
+    const out = { bgm: -1, env: [] as { marker: number; x: number; y: number }[] };
+    const s = this.self;
+    if (!s || this.floor < 0) return out;
+    const [px, py] = s.pos(now);
+    const cx = W / 2, cy = H / 2 + 24;
+    const gx = Math.round(px), gy = Math.round(py);
+    let best: [number, number] | null = null;
+    for (let y = Math.max(0, gy - 16); y < Math.min(this.height, gy + 21); y++) {
+      for (let x = Math.max(0, gx - 20); x < Math.min(this.width, gx + 17); x++) {
+        const k = y * this.width + x;
+        if (!this.walk[k]) continue;
+        const ex = cx + (x - px + (y - py)) * 32, ey = cy + (y - py - (x - px)) * 24;
+        for (const v of [this.tiles[k], this.objs[k]]) {
+          if (v >= 20 && v <= 37) out.env.push({ marker: v, x: ex, y: ey });
+          else if (v >= 40 && v <= 55 && (!best || ey < best[0] || ey === best[0] && ex < best[1])) { best = [ey, ex]; out.bgm = v; }
+        }
+      }
+    }
+    return out;
+  }
+
   build(now: number, W: number, H: number, labels: Label[]): Quad[] {
     this.actorRects = [];
     const out: Quad[] = [];
@@ -497,6 +539,7 @@ export class Field {
       if (ex < -100 || ey < -100 || ex > W + 100 || ey > H + 200) continue;
       const walking = a.moving(now) || (a === s && (this.wantDir >= 0 || this.target !== null));
       const f = a.frameOf(this.assets, now, walking);
+      if (a.se) { sfx(a.se, ex); a.se = 0; }
       const q = f && this.imageQuad(f[0], ex + f[1], ey + f[2]);
       if (q) {
         const flat = a.kind === "item" || a.kind === "gold"; // 地上的道具与石币贴着地面，同一格的人画在它上面

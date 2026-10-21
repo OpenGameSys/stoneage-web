@@ -51,9 +51,10 @@ func (w *World) petDerive(p *Pet) (battle.Stats, [4]int) {
 		return d, [4]int{}
 	}
 	mods, attr := w.equipMods(p.Items, [5]int{d.Atk, d.Def, d.Quick, d.HP, 100})
-	d.Atk = max(0, d.Atk+mods[data.ModAtk])
-	d.Def = max(0, d.Def+mods[data.ModDef])
-	d.Quick = max(0, d.Quick+mods[data.ModQuick])
+	d.Atk = max(0, d.Atk+mods[data.ModAtk]) // 同人物（ITEM_equipEffect）：防御力与敏捷最少 -100
+	d.Def = max(minDefQuick, d.Def+mods[data.ModDef])
+	d.Quick = max(minDefQuick, d.Quick+mods[data.ModQuick])
+
 	d.HP = max(1, d.HP+mods[data.ModHP])
 	return d, attr
 }

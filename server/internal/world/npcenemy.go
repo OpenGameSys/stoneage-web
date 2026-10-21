@@ -364,6 +364,7 @@ func (w *World) npcEnemies(arg string) []*battle.Fighter {
 	}
 	out := make([]*battle.Fighter, len(specs))
 	for i, s := range specs {
+		s.DropRate = w.Rules.DropRate
 		out[i] = battle.NewEnemy(s, battle.EnemySlot(i), bd.Skills, w.rnd)
 	}
 	return out
@@ -400,6 +401,7 @@ func (w *World) doujyouEnemies(n *entity, level int) []*battle.Fighter {
 	}
 	out := make([]*battle.Fighter, len(specs))
 	for i, s := range specs {
+		s.DropRate = w.Rules.DropRate
 		out[i] = battle.NewEnemy(s, battle.EnemySlot(i), bd.Skills, w.rnd)
 	}
 	out[0].Name, out[0].Sprite = n.name, n.sprite

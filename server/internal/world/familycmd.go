@@ -107,8 +107,8 @@ func (w *World) fmAdd(e *entity, f []string) {
 		w.fmMessage(e, "\n很抱歉喔！你必须先完成成人礼才行！")
 		return
 	}
-	if e.char.Gold < fmFee {
-		w.fmMessage(e, fmt.Sprintf("\n很抱歉喔！成立家族需要%d石币的手续费！", fmFee))
+	if e.char.Gold < w.Rules.FamilyFee {
+		w.fmMessage(e, fmt.Sprintf("\n很抱歉喔！成立家族需要%d石币的手续费！", w.Rules.FamilyFee))
 		return
 	}
 	name, slot, sprite, rule := fmField(f, 1), fmInt(f, 2), fmInt(f, 3), fmRule(fmField(f, 4))
@@ -137,7 +137,7 @@ func (w *World) fmAdd(e *entity, f []string) {
 		w.fmMessage(e, "\n申请成立家族失败！")
 		return
 	}
-	e.char.Gold -= fmFee
+	e.char.Gold -= w.Rules.FamilyFee
 	w.sendStatus(e)
 	fm := &family{ID: id, Name: name, LeaderFace: e.char.Face, Accept: true, Rule: rule, Sprite: sprite, Created: w.now().Unix()}
 	fm.Members[0] = &fmMember{ID: e.char.ID, Name: e.char.Name, Level: e.char.Level, Duty: fmDutyLeader, Fame: e.char.Fame, Event: true}
@@ -665,7 +665,7 @@ func (w *World) familymanReply(p, n *entity, seq, button int, sel string) {
 			w.fmMessage(p, "\n很抱歉喔！你的等级不足！")
 		case !p.eventDone(4):
 			w.fmMessage(p, "\n很抱歉喔！你必须先完成成人礼才行！")
-		case p.char.Gold < fmFee:
+		case p.char.Gold < w.Rules.FamilyFee:
 			w.fmMessage(p, "\n很抱歉喔！你的申请手续费不足！")
 		default:
 			w.sendWindow(p, n, "familyadd", 0, seqFamilyAdd, "Hello!!")

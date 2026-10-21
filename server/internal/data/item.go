@@ -35,10 +35,12 @@ const (
 	ItemDish       = 20
 	ItemMetal      = 21 // _ITEM_INSLAY：金属
 	ItemJewel      = 22 // 宝石
-	ItemWBelt      = 24 // _ITEM_INSLAY（金属、宝石）与 _ITEM_CHECKWARES（货物）之后
-	ItemWShield    = 25
-	ItemWShoes     = 26
-	ItemWGlove     = 27
+	ItemWares      = 23 // _ITEM_CHECKWARES：货物（长毛象快递）
+
+	ItemWBelt   = 24 // _ITEM_INSLAY（金属、宝石）与 _ITEM_CHECKWARES（货物）之后
+	ItemWShield = 25
+	ItemWShoes  = 26
+	ItemWGlove  = 27
 )
 
 // 道具能力加减（ITEM_MODIFY*）的下标
@@ -82,6 +84,8 @@ type ItemDef struct {
 	VanishDrop  bool
 	Uses        int // damagebreak：有次数的道具（ITEM_useWarpForNum）能用几次
 	DurInit     int // damagecrushe：产生时的耐久（Durability 是最大耐久 maxdamagecrushe）
+	// 装备条件（_ITEMSET4_TXT 的 nestr / nedex / netra / neprof）：腕力、敏捷（原版内部值，点数 × 100）、转生次数、职业（_CHAR_PROFESSION）
+	NeedStr, NeedDex, NeedTrans, NeedProfession int
 	// 不能寄放（npc_poolitemshop.c：登出消失、丢弃消失、不能宠物邮寄的都不收）
 	DropAtLogout, CanPetMail bool
 	// 加工 / 料理（item_gen.c）：能当材料（ITEM_CANMERGEFROM）、能做出来（ITEM_CANMERGETO）、成分（ITEM_INGNAME0..4 / INGVALUE0..4）
@@ -118,7 +122,9 @@ func LoadItems(dataDir string) (map[int]*ItemDef, error) {
 			ID: v(17), Image: v(18), Cost: v(19), Type: v(20), Field: v(21), Target: v(22), Level: v(23),
 			MaxPile: v(25), Durability: v(32), AttackMin: v(36), AttackMax: v(37),
 			Attrib: v(54), AttribValue: v(55), MagicID: num(c[55], -1), MagicMP: v(58), VanishDrop: v(90) == 1, Uses: v(24), DurInit: v(31),
-			DropAtLogout: v(89) == 1, CanPetMail: v(92) == 1}
+			DropAtLogout: v(89) == 1, CanPetMail: v(92) == 1,
+			NeedStr: v(27), NeedDex: v(28), NeedTrans: v(29), NeedProfession: v(30)}
+
 		for i := 0; i < 8; i++ { // 攻 防 敏 体 气 运 魅 回避：38..53
 			d.Mods[i] = pair(38 + i*2)
 		}

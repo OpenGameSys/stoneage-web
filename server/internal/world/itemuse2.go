@@ -137,7 +137,7 @@ func (w *World) useLuck(e *entity, slot int, def *data.ItemDef) {
 			break
 		}
 	}
-	e.luck = i + 1
+	e.char.Luck = i + 1
 	w.sysMsg(e, "你现在的运气为"+names[i], colorYellow)
 	w.useUp(e, slot)
 	w.itemsChanged(e)

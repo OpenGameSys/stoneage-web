@@ -8,9 +8,10 @@ import (
 
 // EnemySpec 是一只要出场的敌人。
 type EnemySpec struct {
-	Enemy *data.Enemy
-	Temp  *data.EnemyTemp
-	Level int
+	Enemy    *data.Enemy
+	Temp     *data.EnemyTemp
+	Level    int
+	DropRate float64 // 战利品机率的倍率（世界的 rules.dropRate），0 当作 1
 }
 
 // wpick 是原版按权重挑一项的写法：r = RAND(0, 总和-1)，依次累加，权重不为 0 且 r 落在累计值以内就选它，否则落到最后一项。
@@ -178,7 +179,12 @@ func NewEnemy(s EnemySpec, slot int, skills map[int]*data.Skill, rnd *rand.Rand)
 		Capture: s.Enemy.PetFlag != 0, Get: t.Get}
 	// ENEMY_createEnemy：身上的道具按千分比机率产生（_FIX_ITEMPROB：RAND(0,999) < 机率）
 	for i, id := range s.Enemy.Items {
-		if p := s.Enemy.ItemProbs[i]; p > 0 && id > 0 && rnd.IntN(1000) < p {
+		p := s.Enemy.ItemProbs[i]
+		if s.DropRate > 0 && s.DropRate != 1 {
+			p = int(float64(p) * s.DropRate)
+		}
+		if p > 0 && id > 0 && rnd.IntN(1000) < p {
+
 			f.Drops = append(f.Drops, id)
 		}
 	}

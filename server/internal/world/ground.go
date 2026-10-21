@@ -365,13 +365,14 @@ func (w *World) sweepGround() {
 			if g == nil {
 				continue
 			}
-			life := itemDeleteTime
+			life := w.Rules.GroundItem
 			switch o.kind {
 			case "gold":
-				life = goldDeleteTime
+				life = w.Rules.GroundGold
 			case "pet":
-				life = petDeleteTime
+				life = w.Rules.GroundPet
 			}
+
 			if now.Sub(g.putTime) >= life {
 				w.removeGround(o)
 			}

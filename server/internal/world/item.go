@@ -97,7 +97,7 @@ func (w *World) equipMods(items []*Item, base [5]int) (mods [data.ModCount]int, 
 			continue
 		}
 		def := w.game.Items[it.ID]
-		if def == nil {
+		if def == nil || def.NeedProfession > 0 { // 职业不合的装备没有效果（CHAR_complianceParameter 前先拿下，见 unequipProfession）
 			continue
 		}
 		for i := range mods {
@@ -168,7 +168,7 @@ func (w *World) sendInventory(e *entity) {
 		// 装备着的道具带的咒术（CHAR_makeStatusString 的 "J"：精灵窗口列出的内容）
 		if m, mp := w.equipMagic(e, i); m != nil {
 			x := &msg.Items[len(msg.Items)-1]
-			x.Magic, x.MagicMemo, x.MagicMp, x.MagicField, x.MagicTarget, x.MagicDead = m.Name, m.Comment, mp, m.Field, m.Target, m.Dead
+			x.Magic, x.MagicMemo, x.MagicMp, x.MagicField, x.MagicTarget, x.MagicDead, x.MagicFunc, x.MagicOption = m.Name, m.Comment, mp, m.Field, m.Target, m.Dead, m.Func, m.Option
 		}
 	}
 	e.client.Send(msg)
@@ -301,11 +301,33 @@ func (w *World) canEquip(e *entity, it *Item, slot int) error {
 	if e.char.Trans == 0 && def.Level > e.char.Level {
 		return fmt.Errorf("等级不够，无法装备")
 	}
+	// CHAR_EquipItem（_ITEMSET4_TXT）：腕力、敏捷、转生次数不够，或要职业的道具（没有职业系统，人物都是无职业）都不能装备
+	if def.NeedProfession != 0 {
+		return fmt.Errorf("职业不符，无法装备")
+	}
+	if e.char.Str*100 < def.NeedStr || e.char.Dex*100 < def.NeedDex || e.char.Trans < def.NeedTrans {
+		return fmt.Errorf("能力不够，无法装备")
+	}
 	// _ITEM_EQUITSPACE：拿弓时不能装盾（ITEM_getEquipPlace 对弓回 -1）
 	if def.Type == data.ItemBow && e.inv[data.SlotShield] != nil && slot == data.SlotArm {
 		return fmt.Errorf("装备盾牌时不能使用弓")
 	}
 	return nil
+}
+
+// unequipProfession 是 _CHAR_PROFESSION 上线时的修正（char.c）：与人物职业不合的装备拿下放进道具栏（道具栏满了就留在身上，但没有效果）。
+func (w *World) unequipProfession(e *entity) {
+	for i := 0; i < data.EquipSlots; i++ {
+		if d := w.itemDef(e.inv[i]); d != nil && d.NeedProfession > 0 {
+			it := e.inv[i]
+			e.inv[i] = nil
+			if w.addItem(e.inv, it) < 0 {
+				e.inv[i] = it
+			}
+		}
+
+	}
+	e.char.Items = e.inv.String()
 }
 
 // ItemMove 移动道具：道具栏之间交换或叠加；拖到装备位就是装备，从装备位拖回道具栏就是卸下。

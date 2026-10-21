@@ -7,9 +7,28 @@ db: bin/saserver.db       # SQLite 数据库（账号、角色、家族……）
 assets: assets            # 从原客户端导出的资源（tools/asset-export）
 client: client            # 客户端页面（index.html 与 node client/build.mjs 产生的 dist/）
 origins: []               # 额外允许连 WebSocket 的页面来源，例如 [https://example.com]；默认只允许同源
-gm: false                 # 允许聊天里的调试指令（/warp、/item、/gold……），只用于开发
+gms: []                   # GM 的账号名（登录用的账号，可以多个，例如 [admin, tester1]）：系统窗口多一个"GM 指令"选单，别人看不到也用不了
 
 # 大区与线路：每条线路是一个独立的世界，账号与角色共用，家族所有线路共用
 groups:
   - name: 石器时代
     lines: [一线, 二线, 三线]
+log: info                 # 日志等级：debug / info / warn / error
+maxChars: 2               # 每个账号的角色位（原版 2，最多 8）
+
+# 游戏规则（没写的项目用原版的值；时间以秒为单位）
+rules:
+  expRate: 1              # 战斗经验倍率
+  shareExp: true          # 经验共享：战斗结束时还在场的人物、出战宠物、骑宠都拿一样多的经验；false 是原版的谁打倒谁拿
+  dropRate: 1             # 战利品机率倍率
+  encounterRate: 1        # 遇敌机率倍率（0 不会遇敌）
+  turnTime: 30            # 每回合选指令的秒数（5..300）
+  levelUpPoints: 3        # 人物每升一级的加点
+  groundItem: 20          # 丢在地上的道具几秒后消失
+  groundPet: 30           # 丢在地上的宠物几秒后消失
+  groundGold: 1800        # 丢在地上的石币几秒后消失
+  familyFee: 10000        # 成立家族的手续费
+  noEscapeFloors: [12345, 142, 40001, 40002, 40003, 40004, 40005, 40006, 40007, 40008, 40009, 40010, 8252, 8253, 8254, 8256]  # 按逃跑会被改成防御的楼层（原版 NOTESCAPE）
+  worldTrans: 5           # 世界频道要几转（原版 THEWORLDTRANS）
+  worldLevel: 140         # 世界频道要几级（THEWORLDLEVEL）
+  worldFame: 1            # 世界频道每句扣的声望，内部值，100 = 显示的 1 点（THEWORLDSNED）

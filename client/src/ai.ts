@@ -17,16 +17,21 @@ const TARGET_TEXT: Record<number, string> = { 1: "自己", 2: "宠物", 3: "我�
 const MT = { MYSELF: 0, OTHER: 1, ALLMYSIDE: 2, ALLOTHERSIDE: 3, ALL: 4, WHOLEOTHERSIDE: 8, SINGLE: 9, ONE_ROW: 10, ALL_ROWS: 11 };
 const MAX_MAGIC = 9, USE_ITEM = 9, NONE = -1;
 
+// other：0 自动丢肉、1 自动抓宠、2 智能战斗（aismart.ts，额外新功能；0 是原版的 AI 模式）
 export interface AiSettings { method: number[]; target: number[]; limit: number[]; other: number[] }
 
 export function defaultAi(): AiSettings {
-  return { method: [USE_ITEM, USE_ITEM, NONE, USE_ITEM], target: [1, 1, 1, 2], limit: [30, 30, 30, 30], other: [0, 0] };
+  return { method: [USE_ITEM, USE_ITEM, NONE, USE_ITEM], target: [1, 1, 1, 2], limit: [30, 30, 30, 30], other: [0, 0, 1] };
 }
 
 export function loadAi(name: string): AiSettings {
   try {
     const s = JSON.parse(localStorage.getItem(`sa.ai.${name}`) ?? "null");
-    if (s && Array.isArray(s.method) && s.method.length === 4) return s;
+    if (s && Array.isArray(s.method) && s.method.length === 4) {
+      if (!Array.isArray(s.other)) s.other = [0, 0];
+      if (s.other.length < 3) s.other.push(1); // 旧的设定没有这一格：预设开着智能战斗
+      return s;
+    }
   } catch { /* 存不了或坏掉就用预设 */ }
   return defaultAi();
 }
@@ -332,17 +337,22 @@ export class AiWindow {
     if (this.other) this.otherFrame(rects);
   }
 
-  /** AI_OtherProc：自动丢肉 / 自动抓宠（3×2 格的小窗口，左上角 (413, 450)） */
+  /**
+   * AI_OtherProc：自动丢肉 / 自动抓宠（原版 3×2 格的小窗口，左上角 (413, 450)）；
+   * 这里多一行"智能战斗"（额外新功能），窗口加高一格、往上移 48。
+   */
   private otherFrame(rects: [number, number, number, number][]) {
-    const ui = this.ui, x = 413, y = 450, s = this.s;
-    ui.window(x, y, 3, 2, "ai-other-wnd");
-    rects.push([x, y, x + 192, y + 96]);
-    ["自动丢肉", "自动抓宠"].forEach((label, i) => {
+    const ui = this.ui, x = 413, y = 402, s = this.s;
+    ui.window(x, y, 3, 3, "ai-other-wnd");
+    rects.push([x, y, x + 192, y + 144]);
+    ["自动丢肉", "自动抓宠", "智能战斗"].forEach((label, i) => {
       const ry = y + 20 * (i + 1);
       ui.text(x + 25, ry, label, FONT.WHITE);
-      if (ui.text(x + 100, ry, s.other[i] ? " ＹＥＳ " : " Ｎ  Ｏ ", FONT.WHITE, `ai-o${i}`)) s.other[i] = s.other[i] ? 0 : 1;
+      const id = `ai-o${i}`;
+      if (ui.text(x + 100, ry, s.other[i] ? " ＹＥＳ " : " Ｎ  Ｏ ", FONT.WHITE, id)) s.other[i] = s.other[i] ? 0 : 1;
+      if (i === 2 && ui.hovered(id)) ui.bottomLine = "智能战斗：按预计的伤害决定补血、复活、集火与宠物的技能，并记住每种敌人与技能的实际伤害。";
     });
-    if (ui.image(WND.CLOSE, x + 100, y + 80, "ai-o-close") && ui.clicked("ai-o-close")) { saveAi(this.name, s); this.other = false; }
+    if (ui.image(WND.CLOSE, x + 100, y + 128, "ai-o-close") && ui.clicked("ai-o-close")) { saveAi(this.name, s); this.other = false; }
   }
 
   /** AI_SetUp/DownCureMethod、ResurrectMethod：在"使用道具"与合条件的精灵之间切换 */

@@ -152,8 +152,13 @@ func TestCaptureRules(t *testing.T) {
 	})
 }
 
-func TestPetBattle(t *testing.T) {
+// TestPetBattle 用原版的经验分配（谁打倒谁拿）；TestPetBattleSharedExp 是预设的经验共享。
+func TestPetBattle(t *testing.T)          { petBattle(t, false) }
+func TestPetBattleSharedExp(t *testing.T) { petBattle(t, true) }
+
+func petBattle(t *testing.T, share bool) {
 	w, db, g := setup(t)
+	w.Rules.ShareExp = share
 	ene := petEnemy(t, g, 1)
 	c, cl := petOwner(t, w, db, "tamer", 30, 100)
 	id := int(c.ID)
@@ -209,10 +214,16 @@ func TestPetBattle(t *testing.T) {
 	if end == nil || end.Result != "win" {
 		t.Fatalf("宠物应打赢：%+v", end)
 	}
-	// 敌人是宠物打倒的：经验给宠物，人没有
-	if end.Exp != 0 || len(end.Pets) != 1 || end.Pets[0].Exp <= 0 {
+	if share {
+		// 经验共享：人与宠物拿一样多（按两者里较低的等级 20 折算）
+		if len(end.Pets) != 1 || end.Pets[0].Exp <= 0 || end.Exp != end.Pets[0].Exp {
+			t.Errorf("人与宠物应拿一样多的经验：%+v", end)
+		}
+	} else if end.Exp != 0 || len(end.Pets) != 1 || end.Pets[0].Exp <= 0 {
+		// 原版：敌人是宠物打倒的，经验给宠物，人没有
 		t.Errorf("经验应给打倒敌人的宠物：%+v", end)
 	}
+
 	w.Do(func() {
 		if p := w.players[id].pets.Pets[slot]; p.Exp != before+end.Pets[0].Exp {
 			t.Errorf("宠物经验应为 %d，实际 %d", before+end.Pets[0].Exp, p.Exp)

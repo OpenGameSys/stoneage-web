@@ -16,6 +16,7 @@ import { FamilyWindow } from "./family.ts";
 import { PetWindow } from "./pets.ts";
 import { AutoMap } from "./automap.ts";
 import { AiWindow } from "./ai.ts";
+import { GmWindow } from "./gm.ts";
 import { album } from "./album.ts";
 
 // 原版图号（anim_tbl.h，按 VER25_RELEASE 求值）
@@ -41,18 +42,19 @@ export interface Settings {
   chatColor: number;   // 自己发言的文字颜色 0..9（MyChatBuffer.color）
   voice: number;       // 发言音量 1..10（NowMaxVoice，决定附近频道听得到的范围）
   bgmVolume: number;   // 1..15（t_music_bgm_volume）
-  bgmPitch: number;    // -8..8（t_music_bgm_pitch）
+  bgmPitches: Record<number, number>; // 每首背景音乐各自的节奏 -8..8（t_music_bgm_pitch[曲子编号]）
   seVolume: number;    // 1..15（t_music_se_volume）
   stereo: boolean;     // stereo_flg
   mute: boolean;       // MuteFlag
   smoothCursor: boolean; // MouseCursorFlag：平滑 = 用系统光标
   hideOthers: boolean; // 人物屏蔽开关
   autoBattle: boolean; // 自动战斗（原版 AI_SELECT）
+  quickBattle: boolean; // 快速战斗（额外新功能）：不进战斗画面，照战斗设定自动打完
 }
 
 const DEFAULTS: Settings = {
-  chatLines: 6, chatColor: 0, voice: 3, bgmVolume: 15, bgmPitch: 0, seVolume: 15,
-  stereo: true, mute: false, smoothCursor: false, hideOthers: false, autoBattle: false,
+  chatLines: 6, chatColor: 0, voice: 3, bgmVolume: 15, bgmPitches: {}, seVolume: 15,
+  stereo: true, mute: false, smoothCursor: false, hideOthers: false, autoBattle: false, quickBattle: false,
 };
 const KEY = "sa.settings";
 
@@ -106,6 +108,16 @@ export interface MenuHost {
   fmReply(win: S2CNpcWindow, button: number, data: string): void; // 家族窗口的 WN 回传
   walking(): boolean;
   esc(): boolean;                               // 本帧按了 Esc
+  currentBgm(): number;                         // 正在播的背景音乐编号（节奏设定用）
+  uiSe(no: number): void;                       // 界面音效（这一帧就不再放点击声 217）
+  gmSend(text: string): void;                   // GM 指令（GmCommand，只有 GM 有选单）
+  gmList(kind: string): void;                   // GM 窗口的清单（GmListReq）
+  gmDetail(kind: string, id: number): void;     // 清单里一项的详情（GmDetailReq）
+
+
+  autoEncount(): boolean;                       // 自动遇敌开着没有
+  setAutoEncount(on: boolean): void;
+  place(): [number, number, number];            // 楼层、x、y
 }
 
 type SystemPage = "main" | "home" | "logout" | "chat" | "se" | "bgm" | "mouse";
@@ -118,6 +130,8 @@ export class Menus {
   mapOpen = false;     // MenuToggleFlag & JOY_CTRL_M
   systemOpen = false;  // MenuToggleFlag & JOY_ESC
   private page: SystemPage = "main";
+  private upHold = { id: "", at: 0, last: 0, sent: 0, max: 0 }; // 状态窗口的加点钮按住不放
+
   private result: { name: string; exp: number; lvUp: boolean; items: string[]; pets: ResultPet[]; at: number } | null = null;
   pets: S2CPets | null = null; // 宠物栏（宠物窗口用）
   /** 本帧画出的窗口范围。头顶名字画在 2D 覆盖层上，会盖住窗口图，main.ts 用它把窗口下的名字略去 */
@@ -132,6 +146,7 @@ export class Menus {
   readonly family: FamilyWindow;
   readonly ai: AiWindow;
   readonly petWnd: PetWindow;
+  readonly gm: GmWindow;
 
   constructor(ui: Ui, host: MenuHost) {
     this.ui = ui; this.host = host;
@@ -147,6 +162,10 @@ export class Menus {
       petSkill: (p, s, d) => host.petSkill(p, s, d),
     });
     this.ai = new AiWindow(ui, () => this.items.inv.items);
+    this.gm = new GmWindow({
+      ui, canvas: host.canvas, send: (t) => host.gmSend(t), list: (k) => host.gmList(k), detail: (k, id) => host.gmDetail(k, id), place: () => host.place(),
+      status: () => host.status, pets: () => (this.pets?.pets ?? []).filter((p) => p.slot >= 0 && p.slot < 5).sort((a, b) => a.slot - b.slot),
+    });
     this.actions = new ActionWindow({ ui, act: (no) => host.action(no), emote: (spr) => host.emote(spr) });
     this.family = new FamilyWindow({
       ui, canvas: host.canvas, send: (t) => host.family(t), reply: (w, b, d) => host.fmReply(w, b, d), chat: (t, c) => host.chat(t, c),
@@ -178,7 +197,13 @@ export class Menus {
   /** 有窗口开着（CheckMenuFlag 等：这时画面上方的按钮不画） */
   windowOpen(): boolean {
     return this.statusOpen || this.mapOpen || this.systemOpen || this.petWnd.open || this.items.open || album.open
-      || this.actions.open || this.trade.open || this.ai.open || this.mail.open || this.family.open;
+      || this.actions.open || this.trade.open || this.ai.open || this.mail.open || this.family.open || this.gm.open;
+  }
+
+  /** 开着几个窗口（主程序按它的增减放开窗口 202 / 关窗口 203 的声音） */
+  openCount(): number {
+    return [this.statusOpen, this.mapOpen, this.systemOpen, this.petWnd.open, this.items.open, album.open, this.actions.open,
+      this.trade.open, this.ai.open, this.mail.open, this.family.open, this.gm.open].filter(Boolean).length;
   }
 
   // 原版 menu.cpp：打开道具窗口时关掉地图（MenuToggleFlag &= ~JOY_CTRL_M），打开地图时关掉道具窗口（&= ~JOY_CTRL_I）
@@ -195,7 +220,7 @@ export class Menus {
   toggleSystem() { const open = !this.systemOpen; if (open) this.closeOthers(); this.systemOpen = open; this.page = "main"; }
 
   /** 离开地图画面（进战斗、登出）：拿掉宠物改名的 DOM 输入框 */
-  leave() { this.petWnd.leave(); }
+  leave() { this.petWnd.leave(); this.gm.leave(); }
 
   /** 战斗胜利后的结果窗口（menu.cpp BattleResultWndFlag），RESULT_WND_CLOSE_TIME 300 帧后自动关闭 */
   showResult(name: string, exp: number, lvUp: boolean, items: string[], pets: ResultPet[] = []) {
@@ -214,6 +239,13 @@ export class Menus {
     this.rects = [];
     if (this.trade.open) { this.trade.frame(this.rects); return; } // 交易中只有交易窗口（MenuToggleFlag = JOY_CTRL_T）
     this.taskBar();
+    // GM 窗口开着时只画它：别的窗口的文字画在 2D 覆盖层，会叠到 GM 窗口上（关掉后原来开着的窗口照样回来）
+    if (this.gm.open) {
+      this.gm.frame(this.rects, this.host.esc());
+
+      return;
+    }
+
     if (this.result) this.resultWindow();
     if (this.duel) this.duelWindow();
     if (this.statusOpen) this.statusWindow();
@@ -226,6 +258,7 @@ export class Menus {
     this.actions.frame(this.rects);
     this.mail.frame(this.rects);
     this.family.frame(this.rects, this.host.esc());
+    this.gm.frame(this.rects, this.host.esc());
   }
 
   /** Ctrl+E / 任务栏的邮件：只留下道具与地图窗口 */
@@ -327,12 +360,26 @@ export class Menus {
       ui.image(CG.STATUS_LV_UP_POINT, mx, py);
       ui.text(mx + 50, my + 88, String(st.points).padStart(2, " "), FONT.YELLOW);
       const pos: [number, number][] = [[mx, py], [mx + 120, py], [mx, py + 20], [mx + 120, py + 20]];
+      // 按一下加一点；按住不放（额外新功能）0.4 秒后连续加，每 0.12 秒一点，按住超过 1.2 秒加快到每 0.05 秒一点，
+      // 加到按下时的剩余点数为止（服务端回来的点数会慢一点，不能用它判断）
+      const now = performance.now(), h = this.upHold;
       pos.forEach(([bx, by], i) => {
         const id = `st-up${i}`;
         const down = ui.hovered(id) && ui.mouse.down;
         ui.image(CG.STATUS_UP_BTN + (down ? 1 : 0), bx, by, id);
-        if (ui.clicked(id)) this.host.statUp(i);
+        if (ui.hovered(id)) ui.bottomLine = "按一下加 1 点，按住不放连续加点。";
+        if (ui.clicked(id)) {
+          this.host.statUp(i);
+          this.upHold = { id, at: now, last: now, sent: 1, max: st.points };
+        } else if (down && h.id === id) {
+          const t = now - h.at;
+          if (t >= 400 && now - h.last >= (t >= 1200 ? 50 : 120) && h.sent < h.max) {
+            this.host.statUp(i);
+            h.last = now; h.sent++;
+          }
+        }
       });
+      if (!ui.mouse.down || !pos.some((_, i) => ui.hovered(`st-up${i}`))) this.upHold.id = "";
     }
     // 四属性条（PET_WND_ATTR_X/Y = 159/5），长度 = 属性值 × 0.8，三层方框做出立体感
     x = wx + 19; y = wy + 174;
@@ -454,6 +501,27 @@ export class Menus {
     y2 += 34;
     // 战斗设定（AI_State = 1）：AI 模式的设定窗口
     if (this.item(x + 140, y2, "    战斗设定  ", "sys-ai")) { this.systemOpen = false; this.ai.show(this.host.status?.name ?? ""); }
+    y2 += 34;
+    // 快速战斗（额外新功能）：遇敌后不切到战斗画面，每回合照战斗设定马上下指令，跳过动画，打完回到地图
+    if (this.item(x + 140, y2, settings.quickBattle ? "    正常战斗    " : "    快速战斗    ", "sys-quick")) {
+      settings.quickBattle = !settings.quickBattle;
+      this.host.chat(settings.quickBattle ? "开启快速战斗！" : "关闭快速战斗！", FONT.RED);
+      this.changed();
+    }
+    if (this.ui.hovered("sys-quick")) this.ui.bottomLine = "快速战斗：不进战斗画面，照\"战斗设定\"自动打完（不播动画）。";
+    y2 += 34;
+    // 自动遇敌（额外新功能）：在现在站的格子与旁边一格之间来回走，直到关掉、手动移动、换地图或耐久力太低
+    const enc = this.host.autoEncount();
+    if (this.item(x + 140, y2, enc ? "    停止遇敌    " : "    自动遇敌    ", "sys-enc")) {
+      this.host.setAutoEncount(!enc);
+      this.systemOpen = false;
+    }
+    if (this.ui.hovered("sys-enc")) this.ui.bottomLine = "自动遇敌：原地来回走动引来敌人（配合自动 / 快速战斗）；手动移动就停止。";
+    y2 += 34;
+
+    // GM 指令：只有服务端发了 GM 选单（config.yaml 的 gms）才有
+    if (this.gm.enabled && this.item(x + 140, y2, "    GM 指令    ", "sys-gm", FONT.YELLOW)) { this.systemOpen = false; this.gm.show(); }
+
     if (this.item(x + 70, y, "    关    闭    ", "sys-close", FONT.AQUA)) this.systemOpen = false;
   }
 
@@ -495,11 +563,19 @@ export class Menus {
     const x = wx + 56;
     let y = wy + 64;
     this.ui.text(x - 8, y, `◆  目前的音量${String(settings.seVolume).padStart(3)}   ◆`, FONT.YELLOW); y += 40;
-    if (this.item(x, y, "     增     加     ", "se-more")) { settings.seVolume = clamp(settings.seVolume + 1, 1, 15); this.changed(); } y += 40;
-    if (this.item(x, y, "     减     少     ", "se-less")) { settings.seVolume = clamp(settings.seVolume - 1, 1, 15); this.changed(); } y += 40;
+    if (this.item(x, y, "     增     加     ", "se-more")) { this.step("seVolume", 1, 1, 15); } y += 40;
+    if (this.item(x, y, "     减     少     ", "se-less")) { this.step("seVolume", -1, 1, 15); } y += 40;
     if (this.item(x, y, settings.stereo ? "       立体声       " : "       单声道       ", "se-stereo")) { settings.stereo = !settings.stereo; this.changed(); }
     y += 52;
     if (this.item(x, y, "      回上一页      ", "se-back", FONT.AQUA)) this.go("main");
+  }
+
+  /** 音量加减：到上下限时是 SE 220（原版），否则照常 */
+  private step(key: "seVolume" | "bgmVolume", d: number, lo: number, hi: number) {
+    const v = clamp(settings[key] + d, lo, hi);
+    if (v === settings[key]) { this.host.uiSe(220); return; }
+    settings[key] = v;
+    this.changed();
   }
 
   // systemWndNo 4：背景音乐
@@ -509,12 +585,19 @@ export class Menus {
     const x = wx + 56;
     let y = wy + 64;
     this.ui.text(x - 8, y, `◆  目前的音量 ${String(settings.bgmVolume).padStart(3)}  ◆`, FONT.YELLOW); y += 40;
-    if (this.item(x, y, "     增      加     ", "bgm-more")) { settings.bgmVolume = clamp(settings.bgmVolume + 1, 1, 15); this.changed(); } y += 40;
-    if (this.item(x, y, "     减      少     ", "bgm-less")) { settings.bgmVolume = clamp(settings.bgmVolume - 1, 1, 15); this.changed(); } y += 48;
-    const p = settings.bgmPitch;
+    if (this.item(x, y, "     增      加     ", "bgm-more")) { this.step("bgmVolume", 1, 1, 15); } y += 40;
+    if (this.item(x, y, "     减      少     ", "bgm-less")) { this.step("bgmVolume", -1, 1, 15); } y += 48;
+    // 节奏是正在播的那一首的（t_music_bgm_pitch[t_music_bgm_no]）
+    const no = this.host.currentBgm(), p = settings.bgmPitches[no] ?? 0;
+    const setPitch = (d: number) => {
+      const v = clamp(p + d, -8, 8);
+      if (v === p || no < 0) { this.host.uiSe(220); return; } // 到底了（原版 SE 220）
+      settings.bgmPitches = { ...settings.bgmPitches, [no]: v };
+      this.changed();
+    };
     this.ui.text(x - 8, y, p === 0 ? "◆ 目前的节奏   0 ◆" : `◆ 目前的节奏 ${(p > 0 ? "+" : "") + p} ◆`, FONT.YELLOW); y += 40;
-    if (this.item(x, y, "      加    快      ", "bgm-fast")) { settings.bgmPitch = clamp(p + 1, -8, 8); this.changed(); } y += 40;
-    if (this.item(x, y, "      减    慢      ", "bgm-slow")) { settings.bgmPitch = clamp(p - 1, -8, 8); this.changed(); } y += 52;
+    if (this.item(x, y, "      加    快      ", "bgm-fast")) setPitch(1); y += 40;
+    if (this.item(x, y, "      减    慢      ", "bgm-slow")) setPitch(-1); y += 52;
     if (this.item(x, y, "      回上一页      ", "bgm-back", FONT.AQUA)) this.go("main");
   }
 

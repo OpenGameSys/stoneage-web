@@ -46,9 +46,18 @@ type Server struct {
 	Store   store.Store
 	Log     *slog.Logger
 	Origins []string // 允许的页面来源；为空时只允许同源
+	// MaxChars 是每个账号的角色位（config.yaml maxChars），0 用原版的 MaxChars
+	MaxChars int
 
 	mu     sync.Mutex
 	online map[int64]*session // 角色 ID → 当前在线的会话（跨线路唯一）
+}
+
+func (s *Server) maxChars() int {
+	if s.MaxChars > 0 {
+		return s.MaxChars
+	}
+	return MaxChars
 }
 
 func (s *Server) line(id int) *Line {
@@ -82,6 +91,9 @@ type session struct {
 	closeMu sync.Once
 	cancel  context.CancelFunc
 }
+
+// Account 是登录的账号名（世界按它判断是不是 GM，World.GMs）。
+func (s *session) Account() string { return s.account.Name }
 
 // Send 实现 world.Client。队列满说明客户端太慢，直接断开，避免拖慢世界协程。
 func (s *session) Send(m proto.Message) {
@@ -291,6 +303,12 @@ func (s *session) handleWorld(m proto.Message) {
 		w.Talk(id, m.ID)
 	case *proto.Chat:
 		w.Chat(id, m.Channel, strings.TrimSpace(m.Text), m.Color, m.Area)
+	case *proto.GmDetailReq:
+		w.GmDetailReq(id, m.Kind, m.ID)
+	case *proto.GmListReq:
+		w.GmListReq(id, m.Kind)
+	case *proto.GmCommand:
+		w.GmCommand(id, m.Text)
 	case *proto.ReturnHome:
 		w.ReturnHome(id)
 	case *proto.BattleCommand:
@@ -387,7 +405,7 @@ func (s *session) sendCharList(ctx context.Context) {
 		s.fail("server", "服务器错误")
 		return
 	}
-	out := proto.CharListResult{Chars: []proto.CharSummary{}, MaxChars: MaxChars}
+	out := proto.CharListResult{Chars: []proto.CharSummary{}, MaxChars: s.srv.maxChars()}
 	for _, c := range list {
 		out.Chars = append(out.Chars, summary(c))
 	}
@@ -412,7 +430,8 @@ func (s *session) createChar(ctx context.Context, m *proto.CharCreate) {
 		reply("出生地不存在")
 		return
 	}
-	if list, err := st.ListCharacters(ctx, s.account.ID); err != nil || len(list) >= MaxChars {
+	if list, err := st.ListCharacters(ctx, s.account.ID); err != nil || len(list) >= s.srv.maxChars() {
+
 		reply("角色位已满")
 		return
 	}

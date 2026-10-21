@@ -145,8 +145,8 @@ func (w *World) mount(e *entity) *battle.Mount {
 		Atk: d.Atk, Def: d.Def, Quick: d.Quick, Attr: p.Attr, Base: [4]float64{float64(p.Vital), float64(p.Str), float64(p.Tgh), float64(p.Dex)}}
 }
 
-// rideResult 是 BATTLE_AddExp 里骑宠的那一份：骑着时打倒的敌人，按骑宠与敌人的等级差折算后 × 0.6。
-func (w *World) rideResult(e *entity, ft *fight) []proto.PetResult {
+// rideResult：战斗结束时骑宠拿经验（exp 由 battleExp 算好）、升级，回传结果窗口的一行（落马了就没有）。
+func (w *World) rideResult(e *entity, ft *fight, exp int) []proto.PetResult {
 	f := ft.b.F[ft.slot]
 	if f.Ride == nil || f.Ride.Fell || e.pets.Ride < 0 {
 		return nil
@@ -155,13 +155,8 @@ func (w *World) rideResult(e *entity, ft *fight) []proto.PetResult {
 	if p == nil {
 		return nil
 	}
-	exp := 0
-	for _, x := range ft.b.F {
-		if x != nil && x.Enemy() && x.HP <= 0 && x.KilledBy == ft.slot && x.KilledRide {
-			exp += int(float64(battle.KillExp(x.Exp, p.Level, x.Level)) * 0.6)
-		}
-	}
 	from := p.Level
+
 	ups := w.petGainExp(p, exp)
 	w.petFeed(e, p, from)
 	return []proto.PetResult{{Slot: e.pets.Ride, Name: p.displayName(), Exp: exp, LevelUp: ups, Level: p.Level}}

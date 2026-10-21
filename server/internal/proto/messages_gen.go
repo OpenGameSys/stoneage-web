@@ -88,6 +88,8 @@ type InvItem struct {
 	MagicField  int    `json:"magicField"`
 	MagicTarget int    `json:"magicTarget"`
 	MagicDead   bool   `json:"magicDead"`
+	MagicFunc   string `json:"magicFunc"`
+	MagicOption string `json:"magicOption"`
 	Flags       int    `json:"flags"`
 	Alch        string `json:"alch"`
 	Merged      bool   `json:"merged"`
@@ -141,6 +143,8 @@ type PetSkill struct {
 	Memo   string `json:"memo"`
 	Field  int    `json:"field"`
 	Target int    `json:"target"`
+	Func   string `json:"func"`
+	Option string `json:"option"`
 }
 
 type PetInfo struct {
@@ -166,6 +170,41 @@ type PetInfo struct {
 	Rideable  bool       `json:"rideable"`
 	Items     []InvItem  `json:"items"`
 	Guard     bool       `json:"guard"`
+	Ext       PetExt     `json:"ext"`
+}
+
+type PetExt struct {
+	Rank     int   `json:"rank"`
+	GetLevel int   `json:"getLevel"`
+	EnemyID  int   `json:"enemyId"`
+	Alloc    []int `json:"alloc"`
+	Std      []int `json:"std"`
+	Grow     []int `json:"grow"`
+	Real     []int `json:"real"`
+	Init     []int `json:"init"`
+	Resist   []int `json:"resist"`
+	Critical int   `json:"critical"`
+	Counter  int   `json:"counter"`
+	Rare     int   `json:"rare"`
+	Vai      int   `json:"vai"`
+	Magic    []int `json:"magic"`
+}
+
+type GmItem struct {
+	Cmd      string   `json:"cmd"`
+	Name     string   `json:"name"`
+	Group    string   `json:"group"`
+	Args     []string `json:"args"`
+	Kinds    []string `json:"kinds"`
+	Defaults []string `json:"defaults"`
+	Hint     string   `json:"hint"`
+}
+
+type GmEntry struct {
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Info  string `json:"info"`
+	Image int    `json:"image"`
 }
 
 type AddressEntry struct {
@@ -485,6 +524,25 @@ type Ping struct {
 
 func (*Ping) MsgType() string { return "Ping" }
 
+type GmCommand struct {
+	Text string `json:"text"`
+}
+
+func (*GmCommand) MsgType() string { return "GmCommand" }
+
+type GmListReq struct {
+	Kind string `json:"kind"`
+}
+
+func (*GmListReq) MsgType() string { return "GmListReq" }
+
+type GmDetailReq struct {
+	Kind string `json:"kind"`
+	ID   int    `json:"id"`
+}
+
+func (*GmDetailReq) MsgType() string { return "GmDetailReq" }
+
 type Logout struct {
 }
 
@@ -495,6 +553,28 @@ type Flags struct {
 }
 
 func (*Flags) MsgType() string { return "Flags" }
+
+type GmMenu struct {
+	Items []GmItem `json:"items"`
+}
+
+func (*GmMenu) MsgType() string { return "GmMenu" }
+
+type GmList struct {
+	Kind    string    `json:"kind"`
+	Entries []GmEntry `json:"entries"`
+}
+
+func (*GmList) MsgType() string { return "GmList" }
+
+type GmDetail struct {
+	Kind  string   `json:"kind"`
+	ID    int      `json:"id"`
+	Image int      `json:"image"`
+	Lines []string `json:"lines"`
+}
+
+func (*GmDetail) MsgType() string { return "GmDetail" }
 
 type DuelResult struct {
 	Delta int `json:"delta"`
@@ -861,6 +941,7 @@ type BattleStart struct {
 	Surprise int             `json:"surprise"`
 	Fighters []BattleFighter `json:"fighters"`
 	Pvp      bool            `json:"pvp"`
+	Event    bool            `json:"event"`
 }
 
 func (*BattleStart) MsgType() string { return "BattleStart" }
@@ -997,6 +1078,12 @@ func DecodeClient(data []byte) (Message, error) {
 		m = &NpcWindowReply{}
 	case "Ping":
 		m = &Ping{}
+	case "GmCommand":
+		m = &GmCommand{}
+	case "GmListReq":
+		m = &GmListReq{}
+	case "GmDetailReq":
+		m = &GmDetailReq{}
 	case "Logout":
 		m = &Logout{}
 	default:

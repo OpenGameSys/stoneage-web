@@ -62,6 +62,9 @@ export class Ui {
   private hot = "";     // 上一帧鼠标下最上层的元素
   private clickHot = ""; // 本帧要触发点击的元素
   bottomLine = "";      // 原版 ShowBottomLineString：画面左下角的说明文字
+  // 这一帧点到了看得见的按钮（图、可点的字、会亮框的热区；窗口底图那种不亮框的不算）：主程序在帧末放点击声（SE 217）
+  clickSound = false;
+  private interactive = new Set<string>();
   bottomLineY = 580;    // 游戏画面里任务栏常驻在最下方，说明文字要往上挪
   debug = new URLSearchParams(location.search).has("hits"); // ?hits：画出所有热区，调布局用
   readonly assets: Assets;
@@ -78,6 +81,8 @@ export class Ui {
     this.clickHot = this.mouse.clicked ? this.hot : "";
     this.quads = []; this.texts = []; this.boxes = []; this.hits = []; this.pics = [];
     this.bottomLine = "";
+    this.clickSound = false;
+    this.interactive.clear();
   }
 
   private hitAt(x: number, y: number): string {
@@ -101,7 +106,11 @@ export class Ui {
   hovered(id: string) { return this.hot === id; }
   /** 鼠标是否停在某个界面元素上（此时地图上的点击不生效） */
   overUi() { return this.hot !== ""; }
-  clicked(id: string) { return this.clickHot === id; }
+  clicked(id: string) {
+    const c = this.clickHot === id;
+    if (c && this.interactive.has(id)) this.clickSound = true;
+    return c;
+  }
 
   /**
    * 画一张图：num 默认是地图图号（原版 StockDispBuffer 的 CG 编号，经 realGetNo 换算），≥1000000 为高彩图号；
@@ -118,6 +127,7 @@ export class Ui {
     if (tex) this.quads.push({ tex, x: qx, y: qy, u: e.x, v: e.y, w: e.w, h: e.h });
     if (id) {
       this.hits.push({ id, x1: qx, y1: qy, x2: qx + e.w, y2: qy + e.h });
+      if (highlight) this.interactive.add(id);
       const on = this.hovered(id);
       if (on && highlight) this.box(qx - 2, qy - 2, qx + e.w + 2, qy + e.h + 2, boxColor(), false);
       return on;
@@ -135,6 +145,7 @@ export class Ui {
   /** MakeHitBox：矩形热区，悬停时画原版的闪烁框 */
   hitBox(x1: number, y1: number, x2: number, y2: number, id: string, highlight = true): boolean {
     this.hits.push({ id, x1, y1, x2, y2 });
+    if (highlight) this.interactive.add(id);
     const on = this.hovered(id);
     if (on && highlight) this.box(x1, y1, x2, y2, boxColor(), false);
     return on;
@@ -145,6 +156,7 @@ export class Ui {
     if (id) {
       const w = measure(text, size);
       this.hits.push({ id, x1: x - 2, y1: y - 2, x2: x + w + 2, y2: y + size + 2 });
+      this.interactive.add(id);
       if (this.hovered(id)) this.box(x - 3, y - 4, x + w + 2, y + size + 4, boxColor(), false);
     }
     this.texts.push({ x, y, text, color, size });

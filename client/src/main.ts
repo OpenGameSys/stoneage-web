@@ -1,6 +1,8 @@
 // H5 客户端入口。登录前的画面在 screens.ts，游戏画面在这里（FieldScreen）。
 
 import { Assets } from "./assets.ts";
+import { Sound, setSfx } from "./audio.ts";
+import { MAP_BGM } from "./soundtable.ts";
 import { Connection } from "./net.ts";
 import { Field, MOVE, dirTo, type Label } from "./field.ts";
 import { Renderer } from "./renderer.ts";
@@ -14,7 +16,8 @@ import { Shop } from "./shop.ts";
 import { PetSkillShop, drawPetSelect } from "./petshop.ts";
 import { AutoMap } from "./automap.ts";
 import { loadAi } from "./ai.ts";
-import type { AddressEntry, CharSummary, PartyMember, S2CBattleEnd, S2CFamilyStatus, S2CInventory, S2CNpcWindow, S2CPets, S2CStatus, ServerGroup } from "./proto.gen.ts";
+import { AiMemory } from "./aismart.ts";
+import type { AddressEntry, CharSummary, GmEntry, GmItem, PartyMember, S2CBattleEnd, S2CFamilyStatus, S2CGmDetail, S2CInventory, S2CNpcWindow, S2CPets, S2CStatus, ServerGroup } from "./proto.gen.ts";
 
 const params = new URLSearchParams(location.search);
 const ASSETS = params.get("assets") ?? "/assets/";
@@ -25,6 +28,21 @@ const overlay = document.getElementById("overlay") as HTMLCanvasElement;
 const ctx2d = overlay.getContext("2d")!;
 const renderer = new Renderer(canvas);
 const assets = new Assets(ASSETS, renderer);
+const audio = new Sound(ASSETS, () => settings); // 声音（audio.ts）
+setSfx((no, x) => audio.se(no, x));
+// 界面音效：这一帧放过开关窗口 / 错误等的声音，就不再放点击声 217（原版每个按钮只放一个声音）
+let uiSeFrame = false, openPrev = 0;
+function uiSe(no: number) { audio.se(no); uiSeFrame = true; }
+
+// 战斗的背景音乐（battleproc.cpp BATTLE_SUBPROC_INIT）：头目 / 事件 / 决斗 6（伊甸 13，8519 楼 14），一般 5（伊甸 12）；
+// 泪之海那几层一律 24。伊甸是指被打断的地图音乐是 15..21。
+const TEAR_FLOORS = [817, 8007, 8101, 8100, 8027, 8028, 8029, 8015, 8113, 8114];
+function battleBgm(boss: boolean, floor: number, fieldBgm: number): number {
+  const eden = fieldBgm >= 15 && fieldBgm <= 21;
+  if (TEAR_FLOORS.includes(floor)) return 24;
+  if (boss) return floor === 8519 ? 14 : eden ? 13 : 6;
+  return eden ? 12 : 5;
+}
 const mouse = new Mouse();
 mouse.attach(canvas);
 const ui = new Ui(assets, mouse);
@@ -64,7 +82,7 @@ let modal: Modal | null = null;
 // 道具店（shop.ts）：回传照 NPC 窗口的 NpcWindowReply，data 是原版的字串
 const BAG_SLOTS = 45, EQUIP_SLOTS = 9;
 const autoMap = new AutoMap(assets, ASSETS);
-addEventListener("pagehide", () => field?.saveSeen());
+addEventListener("pagehide", (e) => { field?.saveSeen(); if (!e.persisted) renderer.dispose(); }); // 真的关掉页面时交还显存
 const petSkillShop = new PetSkillShop();
 const shop = new Shop({
   reply: (win, data) => app.net?.send({ t: "NpcWindowReply", id: win.id, seq: win.seq, button: 0, data }),
@@ -243,7 +261,17 @@ const app: App = {
     });
     // 玩家发言用发言者在聊天设定里选的颜色（原版 TK 协议带 color）
     // 没有发言者的是系统文字（原版 CHAR_talkToCli(..., -1, ...)，如"交出某某。"），只显示内容
-    c.on("ChatMsg", (m) => chat(m.from ? `${m.channel === "world" ? "[世界]" : m.channel === "family" ? "[族]" : ""}${m.from}：${m.text}` : m.text, FONT_PAL[m.color] ?? FONT.WHITE));
+    // GM 指令选单：只有 GM 上线时服务端才发（config.yaml 的 gms）
+    c.on("GmMenu", (m) => { gmItems = m.items; if (screen instanceof FieldScreen) screen.setGmMenu(m.items); });
+    c.on("GmList", (m) => { if (screen instanceof FieldScreen) screen.gmList(m.kind, m.entries); });
+    c.on("GmDetail", (m) => { if (screen instanceof FieldScreen) screen.gmDetail(m); });
+
+
+    c.on("ChatMsg", (m) => {
+      if (m.from === "GM" && !m.fromId && screen instanceof FieldScreen) screen.gmReply(m.text); // GM 指令的回应也列在 GM 窗口
+      chat(m.from ? `${m.channel === "world" ? "[世界]" : m.channel === "family" ? "[族]" : ""}${m.from}：${m.text}` : m.text, FONT_PAL[m.color] ?? FONT.WHITE);
+    });
+
     // 家族（lssproto_FM_recv 与 F 状态）
     const familyWnd = () => screen instanceof FieldScreen ? screen.menus.family : null;
     c.on("FamilyMsg", (m) => familyWnd()?.onMsg(m.text));
@@ -276,37 +304,55 @@ const app: App = {
     const mailWnd = () => screen instanceof FieldScreen ? screen.menus.mail : null;
     c.on("AddressBook", (m) => { addressBook = m.entries; mailWnd()?.setBook(m.entries); });
     c.on("AddressUpdate", (m) => { for (const e of m.entries) addressBook[e.slot] = e; mailWnd()?.update(m.entries); });
-    c.on("MailRecv", (m) => mailWnd()?.receive(m.index, m.date, m.text, m.petSprite >= 0 ? { sprite: m.petSprite, level: m.petLevel, name: m.petName } : null, m.itemImage));
+    // 收到邮件：SE 101（netproc.cpp lssproto_MSG_recv）
+    c.on("MailRecv", (m) => { audio.se(101); mailWnd()?.receive(m.index, m.date, m.text, m.petSprite >= 0 ? { sprite: m.petSprite, level: m.petLevel, name: m.petName } : null, m.itemImage); });
     c.on("BattleJoin", (m) => battle?.join(m));
     // 战斗：遇敌时切到战斗画面，打完回到原来的地图画面
     c.on("BattleStart", (m) => {
       if (!(screen instanceof FieldScreen) || !field) return;
       const back = screen;
       field.target = null;
+      // 快速战斗：留在地图画面、音乐不换，BattleScreen 只在背后跑（quickFrame）
+      const quick = settings.quickBattle;
+      // 遇敌：SE 215，地图音乐马上停（不淡出），记下来打完再从头播；环境音停掉
+      const fieldBgm = audio.currentBgm, bgm = battleBgm(m.pvp || m.event, field.floor, fieldBgm);
+      if (!quick) {
+        audio.se(215);
+        audio.ambientFrame([], 0);
+        audio.playBgm(bgm);
+      }
       battle = new BattleScreen({
         ui, assets, root: ASSETS,
         send: (kind, target, item = -1) => app.net?.send({ t: "BattleCommand", kind, target, item }),
         sendHelp: (on) => app.net?.send({ t: "BattleHelp", on }),
+        // 抓到宠物：放一次 BGM 0，255 帧后战斗音乐从头再播（oft.cpp 8675 / 8732）
+        captured: () => { audio.playBgm(0); setTimeout(() => { if (battle) audio.playBgm(bgm); }, 255 * 1000 / 60); },
         sendPet: (skill, target) => app.net?.send({ t: "BattlePetCommand", skill, target }),
         pets: () => pets,
         inventory: () => inventory,
         chat,
-        auto: () => settings.autoBattle,
+        auto: () => settings.autoBattle || quick,
+        quick: () => quick,
         aiSettings: () => loadAi(selfStatus?.name ?? ""),
+        aiMemory: () => aiMemory(selfStatus?.name ?? ""),
+        myAtk: () => selfStatus?.atk ?? 10,
         place: () => [field?.floor ?? -1, field?.self?.x ?? 0, field?.self?.y ?? 0],
         finish: (end) => {
           battle = null;
+          // 战斗结束淡出，回到地图后原来的地图音乐从头播（之后照地图记号）
+          if (!quick) audio.fadeOutBgm(() => audio.playBgm(fieldBgm));
+          if (end && (end.levelUp > 0 || end.pets?.some((p) => p.levelUp > 0))) audio.se(211); // 升级（结果窗口）
           // 自动丢肉（AI_OtherSetting[0]）：战斗结束时把道具栏里的肉（图 24000..24044）都丢掉
-          if (settings.autoBattle && loadAi(selfStatus?.name ?? "").other[0]) {
+          if ((settings.autoBattle || quick) && loadAi(selfStatus?.name ?? "").other[0]) {
             for (const it of inventory.items) if (it.slot >= 9 && it.image >= 24000 && it.image <= 24044) app.net?.send({ t: "ItemDrop", slot: it.slot });
           }
-          app.go(back);
+          if (!quick) app.go(back);
           if (pendingDuel) { back.showDuelResult(pendingDuel.delta, pendingDuel.dp); pendingDuel = null; }
-          else if (end?.result === "win") back.showResult(end); // 原版：回到地图后显示战斗结果窗口
+          else if (end?.result === "win" && !quick) back.showResult(end); // 原版：回到地图后显示战斗结果窗口（快速战斗只写在聊天栏）
         },
       }, m);
       const b = battle;
-      app.go({ frame: (now) => { if (field) updatePalette(now, field.palette); b.frame(now); } });
+      if (!quick) app.go({ frame: (now) => { if (field) updatePalette(now, field.palette); b.frame(now); } });
     });
     c.on("BattleTurn", (m) => battle?.onTurn(m));
     c.on("BattleEnd", (m) => {
@@ -343,7 +389,12 @@ const app: App = {
     return c;
   },
   disconnect() { const c = app.net; app.net = null; c?.close(); },
-  go(s: Screen) { screen.leave?.(); screen = s; s.enter?.(); },
+  go(s: Screen) {
+    screen.leave?.(); screen = s; s.enter?.();
+    // 选人物的画面放 BGM 2（login.cpp 1672），回到标题淡出（原版标题、选线路都没有音乐）
+    if (s instanceof CharSelectScreen) { if (audio.currentBgm !== 2) audio.playBgm(2); }
+    else if (s instanceof LoginScreen) audio.fadeOutBgm();
+  },
   message(text, then) { modal = { kind: "msg", lines: wrap(text), then }; },
   confirm(text, then) { modal = { kind: "yesno", text, then }; },
   enterGame(id) {
@@ -351,7 +402,9 @@ const app: App = {
     field = new Field(assets, app.net);
     field.hideOthers = settings.hideOthers;
     selfStatus = null;
+    gmItems = [];
     chatLog.length = 0;
+    audio.fadeOutBgm(); // 选好人物：选人物的音乐淡出（PROC_CHAR_LOGIN_START）
     app.net.send({ t: "CharEnter", id });
   },
 };
@@ -372,6 +425,13 @@ let mailPetNo = -1;   // 邮件宠物（pc.mailPetNo，只在客户端）
 let pendingDuel: { delta: number; dp: number } | null = null; // RD：决斗打完要显示的 DP
 let addressBook: AddressEntry[] = [];
 let familyStatus: S2CFamilyStatus | null = null; // F 状态（家族、职位、频道）
+let gmItems: GmItem[] = []; // GM 指令选单（不是 GM 时是空的）
+// 智能战斗学到的伤害：每个角色一份（换角色时换）
+let aiMem: AiMemory | null = null;
+function aiMemory(name: string): AiMemory {
+  if (!aiMem || aiMem.name !== name) aiMem = new AiMemory(name);
+  return aiMem;
+}
 function partyActive(): boolean { return party.some((p) => p !== null); }
 function clearParty() { party.fill(null); if (field) field.follower = false; }
 const chatLog: { text: string; color: string }[] = [];
@@ -426,7 +486,7 @@ class FieldScreen implements Screen {
     statUp: (stat) => app.net?.send({ t: "StatUp", stat }),
     itemMove: (from, to) => app.net?.send({ t: "ItemMove", from, to }),
     itemUse: (slot, target) => app.net?.send({ t: "ItemUse", slot, target }),
-    magicUse: (slot, target) => app.net?.send({ t: "MagicUse", slot, target }),
+    magicUse: (slot, target) => { audio.se(100); app.net?.send({ t: "MagicUse", slot, target }); },
     dropGold: (amount) => app.net?.send({ t: "GoldDrop", amount }),
     itemDrop: (slot, name) => app.confirm(`要丢掉${name}吗？`, (yes) => { if (yes) app.net?.send({ t: "ItemDrop", slot }); }),
     petItem: (pet, from, to) => app.net?.send({ t: "PetItemEquip", pet, from, to }),
@@ -442,7 +502,7 @@ class FieldScreen implements Screen {
       field = null;
       app.go(new CharSelectScreen(app));
     },
-    settingsChanged: () => { if (field) field.hideOthers = settings.hideOthers; applyCursor(); },
+    settingsChanged: () => { if (field) field.hideOthers = settings.hideOthers; applyCursor(); audio.apply(); },
     map: () => {
       const s = field?.self;
       if (!field || !s || field.floor < 0) return null;
@@ -452,8 +512,40 @@ class FieldScreen implements Screen {
     fmReply: (win, button, data) => app.net?.send({ t: "NpcWindowReply", id: win.id, seq: win.seq, button, data }),
     walking: () => !!field?.self?.moving(performance.now()),
     esc: () => keyPressed.has("Escape"),
+    currentBgm: () => audio.currentBgm,
+    uiSe,
+    autoEncount: () => this.enc !== null,
+    setAutoEncount: (on) => {
+      const s = field?.self;
+      this.enc = on && s && field ? { floor: field.floor, x: s.x, y: s.y, dir: (s.dir + 4) & 7, target: null } : null;
+      chat(this.enc ? "开始自动遇敌！" : "停止自动遇敌！", FONT.RED);
+    },
+    gmSend: (text) => app.net?.send({ t: "GmCommand", text }),
+    gmList: (kind) => app.net?.send({ t: "GmListReq", kind }),
+    gmDetail: (kind, id) => app.net?.send({ t: "GmDetailReq", kind, id }),
+    place: () => [field?.floor ?? -1, field?.self?.x ?? 0, field?.self?.y ?? 0],
   });
   private seenSavedAt = 0;
+  // 自动遇敌（额外新功能，像外挂的"原地遇敌"）：开启时站的格子与旁边一格之间来回走；target 是这次自己设的目的地
+  private enc: { floor: number; x: number; y: number; dir: number; target: [number, number] | null } | null = null;
+
+  /** 自动遇敌的一帧：站定、没有战斗与窗口时，下一步走到另一格；被手动移动、换地图、耐久力太低就停 */
+  private encountFrame(f: Field, now: number) {
+    const e = this.enc, s = f.self;
+    if (!e || !s) return;
+    const stop = (why: string) => { this.enc = null; chat(`自动遇敌停止：${why}`, FONT.RED); };
+    if (f.floor !== e.floor) return stop("换了地图");
+    if (f.wantDir >= 0 || (f.target !== null && f.target !== e.target)) return stop("手动移动");
+    if (battle || modal || this.input || f.follower || s.moving(now) || f.target !== null) return;
+    if (selfStatus && selfStatus.maxHp > 0 && selfStatus.hp * 5 < selfStatus.maxHp) return stop("耐久力太低");
+    if (s.x !== e.x || s.y !== e.y) { e.target = [e.x, e.y]; f.target = e.target; return; }
+    // 先试上次的方向，再按顺序找旁边一格能走、不是传送点的
+    for (let k = 0; k < 8; k++) {
+      const d = (e.dir + k) & 7, nx = e.x + MOVE[d][0], ny = e.y + MOVE[d][1];
+      if (f.plainWalkable(nx, ny)) { e.dir = d; e.target = [nx, ny]; f.target = e.target; return; }
+    }
+    stop("旁边没有可以走的格子");
+  }
 
   leave() { this.input?.remove(); this.input = null; this.menus.leave(); }
 
@@ -470,20 +562,44 @@ class FieldScreen implements Screen {
   setInventory(m: S2CInventory) { this.menus.items.inv = m; }
 
   setPets(m: S2CPets) { this.menus.setPets(m); }
+  setGmMenu(items: GmItem[]) { this.menus.gm.setMenu(items); }
+  gmReply(text: string) { this.menus.gm.reply(text); }
+  gmList(kind: string, entries: GmEntry[]) { this.menus.gm.setList(kind, entries); }
+  gmDetail(m: S2CGmDetail) { this.menus.gm.setDetail(m); }
 
   enter() {
     this.menus.items.inv = inventory; if (pets) this.menus.setPets(pets);
     this.menus.mail.load(selfStatus?.name ?? ""); if (addressBook.length) this.menus.mail.setBook(addressBook);
     if (familyStatus) this.menus.family.status = familyStatus;
+    this.menus.gm.setMenu(gmItems);
   }
 
+  /** 开着的窗口数（开窗口 SE 202、关窗口 203 用） */
+  openCount() { return this.menus.openCount() + (this.panel.etcOpen ? 1 : 0); }
+
+  private savedBgmTried = false;
   frame(now: number) {
     const f = field;
     if (!f) return;
+    // 地图的声音记号：背景音乐（40..55）与环境音（20..37）
+    const mk = f.soundMarkers(now);
+    const bgmKey = `sa.bgm.${selfStatus?.name ?? ""}`;
+    if (mk.bgm >= 0) {
+      audio.mapBgm(MAP_BGM[mk.bgm]);
+      // 原版把最后看到的记号存在 map\bgm<格位>.dat，进游戏时附近没有记号就用它（只认 40..53）
+      if (mk.bgm <= 53) try { localStorage.setItem(bgmKey, String(mk.bgm)); } catch { /* */ }
+    } else if (!this.savedBgmTried && f.floor >= 0) {
+      this.savedBgmTried = true;
+      let saved = 0;
+      try { saved = Number(localStorage.getItem(bgmKey) ?? 0); } catch { /* */ }
+      if (saved >= 40 && saved <= 53 && audio.currentBgm < 0 || saved >= 40 && saved <= 53 && audio.currentBgm === 2) audio.mapBgm(MAP_BGM[saved]);
+    }
+    audio.ambientFrame(mk.env, timeZone(saHour(now)));
     if (now - this.seenSavedAt > 5000) { this.seenSavedAt = now; f.saveSeen(); } // 看过的格子每 5 秒存一次
     // Esc 开关系统窗口、Ctrl+S 开关状态窗口（原版 MenuToggleFlag ^= JOY_ESC / JOY_CTRL_S）
     if (!modal && !this.input) {
-      if (keyPressed.has("Escape")) { if (this.menus.ai.open) this.menus.ai.close(); else this.menus.toggleSystem(); }
+      if (keyPressed.has("Escape")) { if (this.menus.ai.open) this.menus.ai.close(); else if (!this.menus.gm.open) this.menus.toggleSystem(); }
+
       // PageUp / PageDown：切换自动战斗（gamemain.cpp，不说话）
       if (keyPressed.has("PageUp") || keyPressed.has("PageDown")) this.menus.toggleAuto(false);
       if (keyPressed.has("Ctrl+s")) this.menus.toggleStatus();
@@ -510,9 +626,11 @@ class FieldScreen implements Screen {
         setTimeout(() => this.input?.focus(), 0);
       }
     }
-    f.wantDir = this.input ? -1 : keyDir();
+    f.wantDir = this.input || battle ? -1 : keyDir(); // 快速战斗中留在地图画面，但不能走
+    this.encountFrame(f, now);
+
     // 鼠标操作（原版 map.cpp moveProc / drawGrid / turnAround）
-    const onField = mouse.x >= 0 && !modal && !ui.overUi() && f.self !== null;
+    const onField = mouse.x >= 0 && !modal && !ui.overUi() && f.self !== null && !battle;
     const grid = onField ? f.screenToGrid(mouse.x, mouse.y, 400, 324) : null;
     // 按住左键 1 秒（MOVE_MODE_CHANGE_TIME）进入跟随模式：每 250ms 朝光标所在格重新走，再点一下退出
     if (mouse.down && onField && now - mouse.downAt >= 1000) this.moveMode = true;
@@ -645,17 +763,27 @@ class FieldScreen implements Screen {
 // ---------------------------------------------------------------------------
 
 let screen: Screen = { frame() {} };
-let frames = 0, fps = 0, fpsAt = performance.now();
+let frames = 0, fps = 0, fpsAt = performance.now(), workMs = 0;
 
 function frame(now: number) {
+  const workAt = performance.now();
   ui.begin();
   if (!(screen instanceof FieldScreen) && !battle) updatePalette(now, 0); // 登录画面固定用 0 号调色板（PaletteChange(DEF_PAL)）
   try {
     screen.frame(now);
+    if (battle?.quick) battle.quickFrame(now); // 快速战斗：画面还是地图，战斗在背后一口气打完
   } catch (e) {
+
     console.error(e); // 一帧出错不能让整个渲染循环停掉
   }
   drawModal();
+  // 开关窗口的声音（202 / 203），这一帧没有别的界面音效时，点到按钮放 217
+  const open = (modal ? 1 : 0) + (screen instanceof FieldScreen ? screen.openCount() : 0);
+  if (open > openPrev) uiSe(202); else if (open < openPrev) uiSe(203);
+  openPrev = open;
+  if (ui.clickSound && !uiSeFrame) audio.se(217);
+  uiSeFrame = false;
+  audio.update(now);
   ui.end();
   renderer.draw(ui.quads, [0, 0, 0]);
   fitOverlay(overlay, ctx2d);
@@ -663,16 +791,40 @@ function frame(now: number) {
   drawOverlay(ctx2d, ui);
   InputBox.layoutAll();
   keyPressed.clear();
+  assets.tick();
   frames++;
+  workMs = workMs * 0.95 + (performance.now() - workAt) * 0.05; // 每帧 JS 的耗时（平滑）：显示器或浏览器限了帧率时，看它才知道还有多少余裕
   if (now - fpsAt >= 1000) { fps = frames; frames = 0; fpsAt = now; }
   const hud = document.getElementById("hud");
-  if (hud) hud.textContent = params.has("debug") ? `${fps} fps  ${renderer.drawCalls} 次绘制  加载中 ${assets.pending}  SA 时 ${saHour(now)}` : "";
+  if (hud) hud.textContent = params.has("debug") ? `${fps} fps  每帧 ${workMs.toFixed(1)} ms  ${renderer.drawCalls} 次绘制  显存 ${assets.pageCount} 页 ${Math.round(assets.gpuBytes / 1048576)} MB  加载中 ${assets.pending}  SA 时 ${saHour(now)}` : "";
   requestAnimationFrame(frame);
+}
+
+/** 进登录画面前的加载画面：先读资源索引，再把界面用的核心图集页传进显存（画在 2D 覆盖层上，进度 0..1） */
+function drawLoading(text: string, p: number) {
+  fitOverlay(overlay, ctx2d);
+  ctx2d.clearRect(0, 0, 800, 600);
+  ctx2d.font = `${FONT_SIZE}px ${FONT_FAMILY}`;
+  ctx2d.textAlign = "center";
+  ctx2d.textBaseline = "top";
+  ctx2d.fillStyle = "#fff";
+  ctx2d.fillText(text, 400, 270);
+  ctx2d.strokeStyle = "#a0a0a4";
+  ctx2d.strokeRect(200.5, 300.5, 400, 14);
+  ctx2d.fillStyle = "#a0f43a";
+  ctx2d.fillRect(202, 302, Math.round(396 * Math.max(0, Math.min(1, p))), 10);
+  ctx2d.fillStyle = "#fff";
+  ctx2d.fillText(`${Math.floor(p * 100)}%`, 400, 324);
+  ctx2d.textAlign = "left";
 }
 
 (async () => {
   try {
-    await assets.init();
+    renderer.draw([], [0, 0, 0]);
+    drawLoading("正在读取资源索引……", 0);
+    await assets.init((p) => drawLoading("正在读取资源索引……", p * 0.15));
+    const n = assets.coreCount;
+    await assets.preloadCore((p) => drawLoading(`正在加载界面资源（${Math.round(p * n)} / ${n}）……`, 0.15 + p * 0.85));
   } catch (e) {
     ctx2d.fillStyle = "#fff";
     ctx2d.font = `${FONT_SIZE}px ${FONT_FAMILY}`;
@@ -696,4 +848,4 @@ let gameCursor = "auto";
 function applyCursor() { canvas.style.cursor = settings.smoothCursor ? "auto" : gameCursor; }
 
 // 调试与自动化测试入口
-(globalThis as any).sa = { app, ui, get field() { return field; }, get battle() { return battle; }, get screen() { return screen; }, assets, renderer, shop };
+(globalThis as any).sa = { app, ui, get field() { return field; }, get battle() { return battle; }, get screen() { return screen; }, assets, renderer, shop, audio };

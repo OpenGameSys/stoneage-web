@@ -304,7 +304,7 @@ func (w *World) luckyReply(p, n *entity, button int) {
 	p.char.Gold -= cost
 	w.sendInventory(p)
 	w.saveProgress(p)
-	list, _ := data.ArgField(arg, fmt.Sprintf("luck%d", p.luck))
+	list, _ := data.ArgField(arg, fmt.Sprintf("luck%d", p.char.Luck))
 	lines := strings.Split(list, ",")
 	w.sendWindow(p, n, "message", BtnOK, seqLuckyMan, "　　　　　　　☆今日的运势☆　\n\n"+npcText(lines[w.rnd.IntN(len(lines))]))
 }

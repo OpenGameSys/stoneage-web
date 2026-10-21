@@ -60,6 +60,8 @@ type Pet struct {
 	MailItem *Item `json:"mailItem,omitempty"`
 	// Guard 是家族守护兽（CHAR_PETFAMILY）
 	Guard bool `json:"guard,omitempty"`
+	// Born 是捕获时的体腕耐敏（扩展资料算实际成长用，petext.go）；旧存档没有
+	Born *[4]int `json:"born,omitempty"`
 }
 
 // gbkLen 是字串在原版（GBK）里的字节数：中文 2 个字节。
@@ -154,6 +156,7 @@ func petFromFighter(f *battle.Fighter, owner int64) *Pet {
 		HP: f.HP, Vital: int(f.Base[0]), Str: int(f.Base[1]), Tgh: int(f.Base[2]), Dex: int(f.Base[3]),
 		Alloc: s.Alloc, Rank: s.Rank, Attr: f.Attr, Skills: s.Skills, Slot: s.Slot, ModAI: s.ModAI,
 		Rare: f.Rare, Critical: s.Critical, Counter: s.Counter, GetLevel: f.Level, LimitLevel: s.LimitLevel}
+	p.Born = &[4]int{p.Vital, p.Str, p.Tgh, p.Dex}
 	for i := range p.Resist {
 		p.Resist[i] = f.Resist[i+1]
 	}
@@ -280,11 +283,13 @@ func (w *World) petInfo(e *entity, i int) proto.PetInfo {
 		NextExp: next, HP: max(0, min(p.HP, d.HP)), MaxHp: d.HP, Atk: d.Atk, Def: d.Def, Agi: d.Quick,
 		Loyalty: w.petLoyalty(e, p), Attrs: p.Attr[:], Trans: p.Trans, MaxSkill: p.Slot, Skills: []proto.PetSkill{},
 		State: e.pets.state(i), CanRename: (p.Owner == 0 || p.Owner == e.char.ID) && !p.Guard, Items: w.petItems(p), Guard: p.Guard,
+		Ext: w.petExt(p),
+
 		// 骑乘钮：这个角色骑得上这只宠物才出现（原客户端按自己的人物与骑宠对照表决定；四色老虎要同色、证书骑宠要学过）
 		Rideable: w.game.Ride.Sprite(e.char.Sprite, w.weaponSprite(e), p.Sprite, e.pets.Licence[0]) != 0}
 	for k, id := range p.Skills {
 		if s := w.game.Battle.Skills[id]; id >= 0 && s != nil {
-			info.Skills = append(info.Skills, proto.PetSkill{Slot: k, ID: id, Name: s.Name, Memo: s.Comment, Field: s.Field, Target: s.Target})
+			info.Skills = append(info.Skills, proto.PetSkill{Slot: k, ID: id, Name: s.Name, Memo: s.Comment, Field: s.Field, Target: s.Target, Func: s.Func, Option: s.Option})
 		}
 	}
 	return info

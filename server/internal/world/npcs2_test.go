@@ -105,7 +105,7 @@ func TestLuckyMan(t *testing.T) {
 	n := findFn(t, w, "LuckyMan")
 	c, cl := besideNPC(t, w, db, "fortune", n)
 	id := int(c.ID)
-	w.Do(func() { e := w.players[id]; e.char.Level, e.char.Gold, e.luck = 7, 10, 3 })
+	w.Do(func() { e := w.players[id]; e.char.Level, e.char.Gold, e.char.Luck = 7, 10, 3 })
 	w.Talk(id, n.id)
 	win, ok := find[*proto.NpcWindow](cl.take())
 	if !ok || !strings.Contains(win.Text, "       7S") {
