@@ -16,14 +16,16 @@ import (
 
 // 文件里的相对路径都以 config.yaml 所在的目录为准。
 type Config struct {
-	Addr     string      `yaml:"addr"`     // 监听地址
-	Data     string      `yaml:"data"`     // 原版 gmsv 数据（含 map/ 与 npc/）
-	DB       string      `yaml:"db"`       // SQLite 数据库文件
-	Assets   string      `yaml:"assets"`   // 导出的网页资源（tools/asset-export 生成）
-	Client   string      `yaml:"client"`   // 客户端页面（含 index.html 与 dist/）
-	Origins  []string    `yaml:"origins"`  // 额外允许的页面来源（默认只允许同源）
-	GMs      []string    `yaml:"gms"`      // GM 的账号名（可以多个）：有 GM 指令选单、能用 GM 指令
-	Groups   []LineGroup `yaml:"groups"`   // 大区与线路
+	Addr     string      `yaml:"addr"`    // 监听地址
+	Data     string      `yaml:"data"`    // 原版 gmsv 数据（含 map/ 与 npc/）
+	DB       string      `yaml:"db"`      // SQLite 数据库文件
+	Assets   string      `yaml:"assets"`  // 导出的网页资源（tools/asset-export 生成）
+	Client   string      `yaml:"client"`  // 客户端页面（含 index.html 与 dist/）
+	Origins  []string    `yaml:"origins"` // 额外允许的页面来源（默认只允许同源）
+	GMs      []string    `yaml:"gms"`     // GM 的账号名（可以多个）：有 GM 指令选单、能用 GM 指令
+	Groups   []LineGroup `yaml:"groups"`  // 大区与线路
+	TLSCert  string      `yaml:"tlsCert"` // 给了就用 HTTPS / WSS（PEM 证书与私钥；对外时账号密码才不是明文）
+	TLSKey   string      `yaml:"tlsKey"`
 	Log      string      `yaml:"log"`      // 日志等级：debug / info / warn / error
 	MaxChars int         `yaml:"maxChars"` // 每个账号的角色位（原版 2）
 	Rules    RulesConfig `yaml:"rules"`    // 游戏规则（world.Rules）
@@ -120,11 +122,15 @@ func loadConfig() (Config, string, error) {
 		}
 	}
 	base := filepath.Dir(path)
-	for _, p := range []*string{&cfg.Data, &cfg.DB, &cfg.Assets, &cfg.Client} {
-		if !filepath.IsAbs(*p) {
+	for _, p := range []*string{&cfg.Data, &cfg.DB, &cfg.Assets, &cfg.Client, &cfg.TLSCert, &cfg.TLSKey} {
+		if *p != "" && !filepath.IsAbs(*p) {
 			*p = filepath.Join(base, *p)
 		}
 	}
+	if (cfg.TLSCert == "") != (cfg.TLSKey == "") {
+		return cfg, path, errors.New("tlsCert 与 tlsKey 要一起给")
+	}
+
 	if len(cfg.Groups) == 0 {
 		return cfg, path, errors.New("groups 至少要有一个大区")
 	}

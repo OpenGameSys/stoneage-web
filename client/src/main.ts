@@ -21,7 +21,9 @@ import type { AddressEntry, CharSummary, GmEntry, GmItem, PartyMember, S2CBattle
 
 const params = new URLSearchParams(location.search);
 const ASSETS = params.get("assets") ?? "/assets/";
-const WS_URL = params.get("ws") ?? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
+// 连到别的服务端只给调试用（?debug&ws=…）：不然一条带 ?ws= 的网址就能把账号密码送到别人的服务器
+const WS_URL = (params.has("debug") ? params.get("ws") : null) ?? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
+
 
 const canvas = document.getElementById("view") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLCanvasElement;

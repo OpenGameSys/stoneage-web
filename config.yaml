@@ -14,6 +14,8 @@ groups:
   - name: 石器时代
     lines: [一线, 二线, 三线]
 log: info                 # 日志等级：debug / info / warn / error
+tlsCert: ""              # 给了证书与私钥（PEM）就用 HTTPS / WSS；对外开放时一定要有，不然账号密码是明文
+tlsKey: ""
 maxChars: 2               # 每个账号的角色位（原版 2，最多 8）
 
 # 游戏规则（没写的项目用原版的值；时间以秒为单位）

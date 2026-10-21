@@ -28,7 +28,10 @@ type client struct {
 	in   chan map[string]any
 }
 
-func startServer(t *testing.T) string {
+func startServer(t *testing.T) string { return startServerWith(t, nil) }
+
+// startServerWith 起一台测试服务端，configure 可以先改 Server 的设定（GM 名单等）。
+func startServerWith(t *testing.T, configure func(*Server)) string {
 	t.Helper()
 	const dir = "../../../gamedata"
 	if _, err := os.Stat(dir); err != nil {
@@ -52,7 +55,11 @@ func startServer(t *testing.T) string {
 		go w.Run(ctx)
 		lines = append(lines, &Line{ID: i + 1, Group: "测试区", Name: name, World: w})
 	}
-	srv := httptest.NewServer(&Server{Lines: lines, Store: db, Log: log, Origins: []string{"*"}})
+	sv := &Server{Lines: lines, Store: db, Log: log, Origins: []string{"*"}}
+	if configure != nil {
+		configure(sv)
+	}
+	srv := httptest.NewServer(sv)
 	t.Cleanup(func() { srv.Close(); cancel(); db.Close() })
 	return "ws" + strings.TrimPrefix(srv.URL, "http")
 }
@@ -128,7 +135,7 @@ func validCreate(name string) *proto.CharCreate {
 
 // login 注册账号、选线路、创建角色、进入世界，返回角色 ID。
 func (c *client) login(account, name string, line int) int {
-	c.send(&proto.Register{Account: account, Password: "secret"})
+	c.send(&proto.Register{Account: account, Password: "secret-pw1"})
 	if r := c.expect("AuthResult"); r["ok"] != true {
 		c.t.Fatalf("注册失败：%v", r)
 	}
@@ -195,7 +202,7 @@ func TestTwoPlayers(t *testing.T) {
 
 	// 同一角色从另一条线路登录：旧连接被踢（跨线路），新连接接管；一线的 a 看到鲍勃离开
 	b2 := dial(t, url)
-	b2.send(&proto.Login{Account: "bob01", Password: "secret"})
+	b2.send(&proto.Login{Account: "bob01", Password: "secret-pw1"})
 	b2.expect("AuthResult")
 	b2.send(&proto.SelectLine{ID: 2})
 	b2.expect("LineSelected")
@@ -219,7 +226,7 @@ func TestTwoPlayers(t *testing.T) {
 func TestCreateRules(t *testing.T) {
 	url := startServer(t)
 	c := dial(t, url)
-	c.send(&proto.Register{Account: "maker", Password: "secret"})
+	c.send(&proto.Register{Account: "maker", Password: "secret-pw1"})
 	c.expect("AuthResult")
 	c.expect("ServerList")
 	c.send(validCreate("没选线路"))

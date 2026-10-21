@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -25,7 +27,11 @@ const (
 	StepBurst    = 3                      // 允许网络抖动造成的连续快步数
 	MaxMapReq    = 64                     // 一次 MapReq 的最大边长
 	MaxChatRunes = 120
+	// chatBurst / chatPerSecond：一个人连说几句之后限到每秒几句（防刷屏）
+	chatBurst     = 4.0
+	chatPerSecond = 1.5
 	// worldChatGap：世界频道两句之间要超过这么久（CHAR_WORKWORLDSENDTIME，原版 > 5 秒）
+
 	worldChatGap = 5 * time.Second
 	SaveInterval = 30 * time.Second
 	// 多久按 SA 时间检查一次 TimeMan 的图（原版是周围有人动作时 NPC_TimeManWatch 检查；一个 SA 时约 5.3 秒）
@@ -69,6 +75,8 @@ type entity struct {
 	gm               bool      // 账号在 World.GMs 里（上线时定）
 	muteUntil        time.Time // GM 的 /mute：这之前不能说话（不存档）
 	worldSentAt      time.Time // 上次在世界频道说话（CHAR_WORKWORLDSENDTIME）
+	chatTokens       float64   // 说话的令牌桶（chatBurst 满、每秒回 chatPerSecond），刷屏的句子直接丢掉
+	chatAt           time.Time
 
 	fight     *fight             // 战斗中
 	window    *npcWindow         // 打开中的 NPC 窗口
@@ -113,6 +121,9 @@ type World struct {
 	GMs map[string]bool
 	// Rules 是 config.yaml 的 rules（rules.go），开机时设定，之后只读
 	Rules Rules
+	// panics 是 safe 拦下的 panic 次数
+	panics atomic.Int64
+
 	// saves 是存档队列：由一个协程按顺序写库，保证同一角色的新存档不会被旧存档盖掉
 	saves   chan func()
 	started time.Time          // 开机时间（记录点报"本星球已经启动了…"）
@@ -197,23 +208,42 @@ func (w *World) Run(ctx context.Context) {
 			}
 			return
 		case f := <-w.cmds:
-			f()
+			f() // Do 包好的，里面已经 safe
 		case <-w.wake:
 			w.drain()
 		case <-save.C:
-			w.saveAll()
+			w.safe(w.saveAll)
 		case <-clock.C:
-			w.updateTimeMen()
-			w.sweepGround()
-			w.tickPlayers()
+			w.safe(w.updateTimeMen)
+			w.safe(w.sweepGround)
+			w.safe(w.tickPlayers)
 		}
 	}
 }
 
-// Do 把 f 投递到世界协程执行，并等待它完成。
+// safe 执行 f；f panic 时记下错误与堆栈、计一次数（Panics），世界协程照常运行：
+// 玩家送来的怪资料（或我们漏掉的边界检查）只能弄坏那一次指令，不能拖垮整台服务器。
+func (w *World) safe(f func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			w.panics.Add(1)
+			w.log.Error("世界协程出错（已拦下）", "err", r, "stack", string(debug.Stack()))
+		}
+	}()
+	f()
+}
+
+// Panics 是 safe 拦下过几次 panic（测试与监控用）。
+func (w *World) Panics() int64 { return w.panics.Load() }
+
+// Do 把 f 投递到世界协程执行，并等待它完成（f panic 时也一定放行，不会让调用的人卡住）。
 func (w *World) Do(f func()) {
 	done := make(chan struct{})
-	w.cmds <- func() { f(); w.drain(); close(done) }
+	w.cmds <- func() {
+		defer close(done)
+		w.safe(f)
+		w.drain()
+	}
 	<-done
 }
 
@@ -238,7 +268,7 @@ func (w *World) drain() {
 			return
 		}
 		for _, f := range fs {
-			f()
+			w.safe(f)
 		}
 	}
 }
@@ -367,6 +397,7 @@ func (w *World) leave(e *entity) {
 	w.notifyLoginLogout(e, false)
 	w.famLogout(e)
 	w.save(e)
+	w.saveProgress(e) // 下线时把数值也存一次：登出消失的道具（上面刚拿掉）与还没来得及存的变化都写进去
 	w.log.Info("下线", "char", e.name)
 }
 
@@ -645,10 +676,12 @@ func sign(v int) int {
 func (w *World) MapReq(charID, floor, x1, y1, x2, y2 int) {
 	w.Do(func() {
 		e := w.players[charID]
-		if e == nil || floor != e.floor || x2 <= x1 || y2 <= y1 || x2-x1 > MaxMapReq || y2-y1 > MaxMapReq {
+		f := w.game.Floors[floor]
+		// 先把座标限制在楼层附近再相减：极端值（±MaxInt）相减会溢出，绕过边长检查后 make 负长度就 panic
+		if e == nil || f == nil || floor != e.floor || x1 < -MaxMapReq || y1 < -MaxMapReq || x2 > f.W+MaxMapReq || y2 > f.H+MaxMapReq ||
+			x2 <= x1 || y2 <= y1 || x2-x1 > MaxMapReq || y2-y1 > MaxMapReq {
 			return
 		}
-		f := w.game.Floors[floor]
 		n := (x2 - x1) * (y2 - y1)
 		md := &proto.MapData{Floor: floor, X1: x1, Y1: y1, X2: x2, Y2: y2, Tiles: make([]int, n), Objs: make([]int, n)}
 		// walk：每格一个字符，'1' 可走、'0' 不可走、'2' 传送点。由服务端按 mapset 规则算好，客户端预判与服务端一致
@@ -685,6 +718,19 @@ func (w *World) Chat(charID int, channel, text string, color, area int) {
 		if utf8.RuneCountInString(text) > MaxChatRunes {
 			text = string([]rune(text)[:MaxChatRunes])
 		}
+		// 发言限速：一个人刷屏会把看得到他的每个人的发送队列塞满（慢的那个会被踢），所以每秒最多几句
+		now := w.now()
+		if e.chatAt.IsZero() {
+			e.chatTokens = chatBurst
+		} else {
+			e.chatTokens = min(chatBurst, e.chatTokens+now.Sub(e.chatAt).Seconds()*chatPerSecond)
+		}
+		e.chatAt = now
+		if e.chatTokens < 1 {
+			w.sysMsg(e, "说话太快了，慢一点。", colorRed)
+			return
+		}
+		e.chatTokens--
 		if e.gm && strings.HasPrefix(text, "/") && w.gmCommand(e, text) {
 			return
 		}
@@ -794,7 +840,9 @@ func chatHears(e *entity, text string, area int) func(o *entity) bool {
 	if area <= 0 {
 		area = 3 // 原版：area 为 0 时按 3
 	}
+	area = min(area, 10) // 聊天设定的音量 1..10（NowMaxVoice）；再大就是乱送的，下面的下标相加会溢出
 	v := textVolume(text)
+
 	if v < 0 {
 		fx, fy := e.x+MOVE[e.dir][0], e.y+MOVE[e.dir][1]
 		return func(o *entity) bool { return (o.x == e.x && o.y == e.y) || (o.x == fx && o.y == fy) }
@@ -972,6 +1020,22 @@ func (w *World) saveAll() {
 }
 
 // Online 返回在线人数（调试用）。
+// Flush 等存档队列里排在前面的写入都做完（换线路重登前要等旧线路存完，不然读到旧存档）。
+func (w *World) Flush(timeout time.Duration) bool {
+	done := make(chan struct{})
+	select {
+	case w.saves <- func() { close(done) }:
+	case <-time.After(timeout):
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 func (w *World) Online() (n int) {
 	w.Do(func() { n = len(w.players) })
 	return

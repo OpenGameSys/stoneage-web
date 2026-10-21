@@ -83,7 +83,11 @@ func (w *World) GmCommand(charID int, text string) {
 			return
 		}
 		if !e.gm {
+			if r := []rune(text); len(r) > 60 { // 别让人用 16KB 的垃圾刷日志
+				text = string(r[:60]) + "…"
+			}
 			w.log.Warn("不是 GM 的角色送来 GM 指令", "char", e.name, "text", text)
+
 			return
 		}
 		if text = strings.TrimSpace(text); !strings.HasPrefix(text, "/") || !w.gmCommand(e, text) {

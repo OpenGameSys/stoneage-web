@@ -78,6 +78,7 @@ type Character struct {
 type Store interface {
 	CreateAccount(ctx context.Context, name, password string) (Account, error)
 	Authenticate(ctx context.Context, name, password string) (Account, error)
+	AccountExists(ctx context.Context, name string) (bool, error)
 	ListCharacters(ctx context.Context, accountID int64) ([]Character, error)
 	CreateCharacter(ctx context.Context, c Character) (Character, error)
 	DeleteCharacter(ctx context.Context, accountID, charID int64) error
@@ -223,7 +224,14 @@ func (s *sqliteStore) CreateAccount(ctx context.Context, name, password string) 
 	return Account{ID: id, Name: name}, nil
 }
 
+func (s *sqliteStore) AccountExists(ctx context.Context, name string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE name = ?`, name).Scan(&n)
+	return n > 0, err
+}
+
 func (s *sqliteStore) Authenticate(ctx context.Context, name, password string) (Account, error) {
+
 	var a Account
 	var hash, salt []byte
 	err := s.db.QueryRowContext(ctx, `SELECT id, name, pass_hash, pass_salt FROM accounts WHERE name = ?`, name).
