@@ -77,9 +77,6 @@ bin/saserver.exe
 go test ./...
 ```
 
-发布包由 GitHub Actions 自动产生（`.github/workflows/release.yml`）：推送 `v*` 标签就会测试、交叉编译三个平台、打包并建立 Release；
-也可以在 Actions 页面手动跑，填几个标签一次发好几个版本。
-
 ### 设定
 
 设定档 `config.yaml`：监听地址 `addr`、数据与资源目录 `data` / `assets` / `client`、资料库 `db`、允许的页面来源 `origins`、
