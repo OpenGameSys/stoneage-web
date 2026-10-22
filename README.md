@@ -27,7 +27,31 @@
 
 ## 快速开始
 
-需要 [Go 1.27+](https://go.dev/dl/) (服务端) 和 [Node.js 22.13+](https://nodejs.org/)（客户端，只用来去掉 TypeScript 类型，不需要 `npm install`）。
+### 方式一：直接用构建好的发布包
+
+到 [Releases](https://github.com/OpenGameSys/stoneage-web/releases) 下载两个文件：
+
+| 文件 | 内容 |
+|---|---|
+| `saserver-<版本>-<平台>.zip` | 服务端（`windows-amd64` / `linux-amd64` / `darwin-arm64` 三选一）、客户端页面、原版数据 `gamedata/`、`config.yaml`、手册 |
+| `assets-<版本>.zip` | 美术与音频（约 0.9 GB，三个平台共用） |
+
+1. 解开平台包；
+2. 把 `assets-<版本>.zip` 解到平台包里的 `assets/` 目录（解完 `assets/manifest.json` 要在这个位置）；
+3. 启动服务端（没有命令行参数，设定都在 `config.yaml`）：
+
+```bash
+bin/saserver.exe
+```
+
+Linux / macOS 是 `bin/saserver`（第一次要 `chmod +x bin/saserver`；macOS 若提示无法验证开发者，`xattr -d com.apple.quarantine bin/saserver`）。
+
+浏览器打开 `http://127.0.0.1:8800/`，在登录页点"注册新账号"，选线路、建角色就能进游戏。
+
+### 方式二：从源码构建
+
+需要 [Go 1.27+](https://go.dev/dl/)（服务端）和 [Node.js 22.13+](https://nodejs.org/)（客户端，只用来去掉 TypeScript 类型，不需要 `npm install`）。
+`assets/` 与 `gamedata/` 都在仓库里，clone 下来就齐了（约 1 GB）。
 
 在 `server` 目录编译服务端：
 
@@ -41,13 +65,22 @@ go build -o ../bin/saserver.exe ./cmd/saserver
 node client/build.mjs
 ```
 
-启动服务端（没有命令行参数，设定都在 `config.yaml`）：
+启动服务端：
 
 ```bash
 bin/saserver.exe
 ```
 
-浏览器打开 `http://127.0.0.1:8800/`，在登录页点"注册新账号"，选线路、建角色就能进游戏。
+然后同样打开 `http://127.0.0.1:8800/`。在 `server` 目录跑测试（用 `gamedata/` 的真实数据）：
+
+```bash
+go test ./...
+```
+
+发布包由 GitHub Actions 自动产生（`.github/workflows/release.yml`）：推送 `v*` 标签就会测试、交叉编译三个平台、打包并建立 Release；
+也可以在 Actions 页面手动跑，填几个标签一次发好几个版本。
+
+### 设定
 
 设定档 `config.yaml`：监听地址 `addr`、数据与资源目录 `data` / `assets` / `client`、资料库 `db`、允许的页面来源 `origins`、
 大区与线路 `groups`、GM 账号 `gms`（可以多个，例如 `gms: [admin, tester1]`；GM 在系统窗口有"GM 指令"选单，也可以在聊天输入
@@ -56,12 +89,6 @@ bin/saserver.exe
 地上东西消失的时间、成立家族的手续费、不能逃跑的楼层、世界频道的门槛（原版要 5 转 140 级、每句扣声望）（没写的项目用原版的值，说明见 `config.yaml` 里的注释）。
 相对路径以 `config.yaml` 所在的目录为准；同目录的 `config.local.yaml` 可以盖掉其中的项目，例如本机开发时写一行 `gms: [tester1]`。
 网页参数：`?debug` 显示帧率与绘制次数，`?hits` 画出所有点击热区。
-
-在 `server` 目录跑测试（用 `gamedata/` 的真实数据）：
-
-```bash
-go test ./...
-```
 
 ## 文件目录说明
 
