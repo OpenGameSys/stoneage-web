@@ -1,0 +1,203 @@
+# 构建与发布。
+#   推送 v* 标签：跑测试 → 交叉编译三个平台 + 构建客户端 → 打包 → 建立同名 Release 并上传。
+#   手动 Run workflow：可以填好几个标签（逗号分开，如 v0.1.3,v0.1.4,v0.1.5），每个标签各自检出、构建、发布到各自的 Release，
+#   互相并行；不填就构建当前分支、只留 artifact 不发布。
+#   发布包：saserver-<版本>-<平台>.zip（服务端、客户端页面、gamedata、config.yaml、手册；不含 assets）
+#          assets-<版本>.zip（美术与音频，约 0.9 GB，三个平台共用；WebP / Opus 本来就压过，用 store 模式打包）
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "要构建的标签，逗号分开（例如 v0.1.3,v0.1.4）；留空 = 当前分支，只构建不发布"
+        default: ""
+      release:
+        description: "建立 / 更新这些标签的 Release"
+        type: boolean
+        default: true
+      with_assets:
+        description: "同时打包 assets（约 0.9 GB）"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # 建 Release、上传文件要写权限
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  # 决定要构建哪些 ref（标签或分支）与要不要发布，后面的 job 用矩阵对每个 ref 并行跑
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      refs: ${{ steps.plan.outputs.refs }}
+      release: ${{ steps.plan.outputs.release }}
+      with_assets: ${{ steps.plan.outputs.with_assets }}
+    steps:
+      - id: plan
+        env:
+          TAGS: ${{ github.event.inputs.tags }}
+          REL: ${{ github.event.inputs.release }}
+          ASSETS: ${{ github.event.inputs.with_assets }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_EVENT_NAME" == push ]]; then
+            refs="[\"${GITHUB_REF#refs/tags/}\"]"; release=true; assets=true
+          elif [[ -n "$TAGS" ]]; then
+            refs=$(echo "$TAGS" | tr -d ' ' | tr ',' '\n' | grep -v '^$' | jq -R . | jq -cs .)
+            release="${REL:-true}"; assets="${ASSETS:-true}"
+          else
+            refs="[\"$GITHUB_REF_NAME\"]"; release=false; assets="${ASSETS:-true}"
+          fi
+          echo "refs=$refs" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "with_assets=$assets" >> "$GITHUB_OUTPUT"
+          echo "构建：$refs 发布：$release assets：$assets"
+
+  test:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ref: ${{ fromJSON(needs.prepare.outputs.refs) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: go test
+        working-directory: server
+        run: go test ./...
+
+  build:
+    needs: [prepare, test]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: ${{ fromJSON(needs.prepare.outputs.refs) }}
+        target: [windows-amd64, linux-amd64, darwin-arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 版本号与平台
+        id: ver
+        run: |
+          ref="${{ matrix.ref }}"
+          if [[ "$ref" == v* ]]; then ver="$ref"; else ver="${ref//\//-}-$(git rev-parse --short HEAD)"; fi
+          goos="${{ matrix.target }}"; goarch="${goos#*-}"; goos="${goos%-*}"
+          suffix=""; [[ "$goos" == windows ]] && suffix=".exe"
+          { echo "ver=$ver"; echo "goos=$goos"; echo "goarch=$goarch"; echo "suffix=$suffix"; } >> "$GITHUB_OUTPUT"
+
+      - name: 构建服务端（纯 Go 的 SQLite，不需要 cgo，直接交叉编译）
+        working-directory: server
+        env:
+          GOOS: ${{ steps.ver.outputs.goos }}
+          GOARCH: ${{ steps.ver.outputs.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags "-s -w" -o ../bin/saserver${{ steps.ver.outputs.suffix }} ./cmd/saserver
+
+      - name: 构建客户端
+        run: node client/build.mjs
+
+      - name: 打包
+        env:
+          VER: ${{ steps.ver.outputs.ver }}
+          SUFFIX: ${{ steps.ver.outputs.suffix }}
+        run: |
+          name="saserver-$VER-${{ matrix.target }}"
+          mkdir -p "dist/$name/bin" "dist/$name/client" "dist/$name/docs" "dist/$name/assets"
+          cp "bin/saserver$SUFFIX" "dist/$name/bin/"
+          cp config.yaml README.md "dist/$name/"
+          cp -r client/index.html client/dist "dist/$name/client/"
+          cp -r gamedata "dist/$name/"
+          # 旧版本可能还没有手册 / 截图，有什么拷什么
+          [ -f docs/手册.md ] && cp docs/手册.md "dist/$name/docs/" || true
+          [ -d docs/screenshots ] && cp -r docs/screenshots "dist/$name/docs/" || true
+          printf '把 assets-%s.zip 解开到这个目录（manifest.json 要在 assets/ 里）。\n' "$VER" > "dist/$name/assets/README.txt"
+          (cd dist && zip -qr "$name.zip" "$name")
+          ls -la dist/*.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saserver-${{ steps.ver.outputs.ver }}-${{ matrix.target }}
+          path: dist/*.zip
+          retention-days: 7
+
+  assets:
+    needs: [prepare, test]
+    if: needs.prepare.outputs.with_assets == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: ${{ fromJSON(needs.prepare.outputs.refs) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - name: 版本号
+        id: ver
+        run: |
+          ref="${{ matrix.ref }}"
+          if [[ "$ref" == v* ]]; then ver="$ref"; else ver="${ref//\//-}-$(git rev-parse --short HEAD)"; fi
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+      - name: 打包 assets（store 模式，WebP / Opus 再压也压不动）
+        run: |
+          mkdir -p dist
+          zip -q -0 -r "dist/assets-${{ steps.ver.outputs.ver }}.zip" assets
+          ls -la dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets-${{ steps.ver.outputs.ver }}
+          path: dist/*.zip
+          retention-days: 7
+
+  release:
+    needs: [prepare, build, assets]
+    # assets 被跳过时也要能发布（always() 再自己判断 build 成功）
+    if: always() && needs.prepare.outputs.release == 'true' && needs.build.result == 'success' && (needs.assets.result == 'success' || needs.assets.result == 'skipped')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: ${{ fromJSON(needs.prepare.outputs.refs) }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: saserver-${{ matrix.ref }}-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        if: needs.prepare.outputs.with_assets == 'true'
+        with:
+          name: assets-${{ matrix.ref }}
+          path: dist
+      - name: 校验和
+        working-directory: dist
+        run: sha256sum *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ matrix.ref }}
+          name: ${{ matrix.ref }}
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          generate_release_notes: true   # 自动列出上一个标签之后的提交
+          body: |
+            解压平台包，再把 assets-*.zip 解到包里的 assets/ 目录，执行 bin/saserver 即可（设定见 config.yaml，用法见 docs/手册.md）。
