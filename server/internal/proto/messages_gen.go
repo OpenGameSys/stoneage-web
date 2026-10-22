@@ -49,6 +49,20 @@ type ObjInfo struct {
 	Help   bool   `json:"help"`
 	Action int    `json:"action"`
 	Family string `json:"family"`
+	Trade  bool   `json:"trade"`
+	Vendor string `json:"vendor"`
+}
+
+type VendorEntry struct {
+	Index  int    `json:"index"`
+	Kind   int    `json:"kind"`
+	Slot   int    `json:"slot"`
+	Price  int    `json:"price"`
+	Name   string `json:"name"`
+	Pile   int    `json:"pile"`
+	Image  int    `json:"image"`
+	Level  int    `json:"level"`
+	Sprite int    `json:"sprite"`
 }
 
 type BattleFighter struct {
@@ -300,6 +314,16 @@ type PartyKick struct {
 }
 
 func (*PartyKick) MsgType() string { return "PartyKick" }
+
+type Vendor struct {
+	Cmd    string `json:"cmd"`
+	Title  string `json:"title"`
+	Kinds  []int  `json:"kinds"`
+	Slots  []int  `json:"slots"`
+	Prices []int  `json:"prices"`
+}
+
+func (*Vendor) MsgType() string { return "Vendor" }
 
 type BattleHelp struct {
 	On bool `json:"on"`
@@ -715,13 +739,51 @@ type PartyMember struct {
 func (*PartyMember) MsgType() string { return "PartyMember" }
 
 type ObjMark struct {
-	ID     int  `json:"id"`
-	Leader bool `json:"leader"`
-	Battle int  `json:"battle"`
-	Help   bool `json:"help"`
+	ID     int    `json:"id"`
+	Leader bool   `json:"leader"`
+	Battle int    `json:"battle"`
+	Help   bool   `json:"help"`
+	Trade  bool   `json:"trade"`
+	Vendor string `json:"vendor"`
 }
 
 func (*ObjMark) MsgType() string { return "ObjMark" }
+
+type VendorSetup struct {
+	Entries []VendorEntry `json:"entries"`
+}
+
+func (*VendorSetup) MsgType() string { return "VendorSetup" }
+
+type VendorList struct {
+	Seller  string        `json:"seller"`
+	Title   string        `json:"title"`
+	Entries []VendorEntry `json:"entries"`
+}
+
+func (*VendorList) MsgType() string { return "VendorList" }
+
+type VendorClose struct {
+}
+
+func (*VendorClose) MsgType() string { return "VendorClose" }
+
+type VendorDetail struct {
+	Index int     `json:"index"`
+	Kind  int     `json:"kind"`
+	Item  InvItem `json:"item"`
+	Pet   PetInfo `json:"pet"`
+}
+
+func (*VendorDetail) MsgType() string { return "VendorDetail" }
+
+type Sound struct {
+	X  int `json:"x"`
+	Y  int `json:"y"`
+	Se int `json:"se"`
+}
+
+func (*Sound) MsgType() string { return "Sound" }
 
 type HelpFlag struct {
 	On bool `json:"on"`
@@ -1032,6 +1094,8 @@ func DecodeClient(data []byte) (Message, error) {
 		m = &Party{}
 	case "PartyKick":
 		m = &PartyKick{}
+	case "Vendor":
+		m = &Vendor{}
 	case "BattleHelp":
 		m = &BattleHelp{}
 	case "JoinBattle":

@@ -375,9 +375,12 @@ func (w *World) broadcastMark(e *entity) {
 	}
 }
 
-// mark 是 e 头上的记号。
+// mark 是 e 头上的记号：队长、战斗 / 求救、交易中（CHAR_ACTTRADE：交易与摆摊的买卖双方）、摊位名（CHAR_STREETVENDOR_OPEN）。
 func (e *entity) mark() *proto.ObjMark {
-	m := &proto.ObjMark{ID: e.id, Leader: e.isLeader()}
+	m := &proto.ObjMark{ID: e.id, Leader: e.isLeader(), Trade: e.trade != nil || e.buying != nil || (e.stall != nil && e.stall.who != nil)}
+	if e.stall != nil {
+		m.Vendor = e.stall.title
+	}
 	if e.watch != nil {
 		m.Battle = e.watch.no + 1 // 观战的人头上也有战斗记号（CHAR_sendBattleWatch）
 	} else if e.fight != nil {

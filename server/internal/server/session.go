@@ -447,6 +447,8 @@ func (s *session) handleWorld(m proto.Message) {
 		w.PartyRequest(id, m.Request)
 	case *proto.PartyKick:
 		w.PartyKick(id, m.Slot)
+	case *proto.Vendor:
+		w.Vendor(id, m.Cmd, m.Title, m.Kinds, m.Slots, m.Prices)
 	case *proto.BattleHelp:
 		w.BattleHelp(id, m.On)
 	case *proto.JoinBattle:

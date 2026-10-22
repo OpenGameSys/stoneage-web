@@ -52,6 +52,7 @@ type bus struct {
 	point    int  // 下一个要到的点（下标）
 	reverse  bool // 回程（NPC_WORK_ROUNDTRIP）
 	mode     int  // 0 停站 1 行驶 3 到站
+	se       bool // seflg：发车、到站时对附近的人放音效 60（CHAR_sendSEoArroundCharacter）
 	at       time.Time
 	wait     time.Duration
 	oneway   bool
@@ -102,6 +103,7 @@ func (w *World) newBus(n *entity) *bus {
 	b.stone = max(0, npcArgNum(arg, "needstone"))
 	b.level = max(0, npcArgNum(arg, "needlevel"))
 	b.oneway = npcArgNum(arg, "oneway") == 1
+	b.se = npcArgNum(arg, "seflg") == 1
 	if s, ok := data.ArgField(arg, "denieditem"); ok {
 		for _, x := range strings.Split(s, ",") {
 			if id := data.Atoi(x); id > 0 {
@@ -216,6 +218,7 @@ func (w *World) busBoard(p, n *entity) {
 func (w *World) busStart(n *entity) {
 	b := n.bus
 	b.mode, b.at = 1, w.now()
+	w.busSE(n)
 	for _, m := range w.busPassengers(n) {
 		w.busSay(n, m, "msg_start")
 	}
@@ -276,6 +279,7 @@ func (w *World) busWalk(n *entity) {
 		if b.point < 0 || b.point >= len(r.points) {
 			b.point = max(0, min(len(r.points)-1, b.point))
 			b.mode, b.at = 3, w.now()
+			w.busSE(n)
 			for _, m := range w.busPassengers(n) {
 				w.busSay(n, m, "msg_end")
 			}
@@ -312,4 +316,17 @@ func (w *World) npcWarp(n *entity, floor, x, y int) {
 		return
 	}
 	w.placeOnFloor(n, floor, x, y, n.dir)
+}
+
+// busSE 是 CHAR_sendSEoArroundCharacter：seflg 的巴士 / 飞机发车、到站时，视野内没在战斗的玩家都听到音效 60（lssproto_SE）。
+func (w *World) busSE(n *entity) {
+	if !n.bus.se {
+		return
+	}
+	msg := &proto.Sound{X: n.x, Y: n.y, Se: 60}
+	for _, o := range w.floors[n.floor] {
+		if o.client != nil && o.fight == nil && abs(o.x-n.x) <= ViewRadius && abs(o.y-n.y) <= ViewRadius {
+			o.client.Send(msg)
+		}
+	}
 }

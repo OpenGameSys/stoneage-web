@@ -2,7 +2,7 @@ package world
 
 // 庄园（AC 的 db_fmpoint、family.c FAMILY_SetPoint、npc_fmletter.c、npc_fmhealer.c、npcutil.c addNpcFamilyTax）。
 // 原版这一版只开了 2 个庄园（MANOR_MAX_NUM），NPC 却摆了 4 个；这里 4 个都做。
-// 庄园争夺战（踢馆、FMWarpMan、FMPKMan……）与家族 PK 场没有做：庄园只能申请空的，家族解散时放掉。
+// 庄园争夺战与家族 PK 场在 fmwar.go；这里是申请（只能申请空的，家族解散时放掉）、邀请函、庄园税与家族小护士。
 
 import (
 	"fmt"

@@ -3,7 +3,7 @@
 //   上面的清单是对方放的、下面是自己放的（各 5 行，用卷轴看其余的），右上是宠物（◀ ▶ 换、"放"放进去）与石币（+ − 或直接输入，"放"只能放一次），
 //   右下是自己道具栏的这一页（双击放一个）；左下"锁定" → 两边都锁定后变成"确定"，"取消"关掉。
 //   开交易：任务栏没有，原版是 Ctrl+T 或画面左上的"交易"钮（面向对方）；对方要开着"交易"开关。
-// 没做的：查看对方的窗口（CG_TRADE_VIEWWND，这里对方放的直接列在上面）、交易对话气泡（_TRADETALKWND）、交易中头上的记号。
+// 没做的：查看对方的窗口（CG_TRADE_VIEWWND，这里对方放的直接列在上面）、交易对话气泡（_TRADETALKWND）。交易中头上有〔交易中〕（ObjMark.trade）。
 
 import type { InvItem, PetInfo } from "./proto.gen.ts";
 import { FONT, InputBox, boxColor, type Ui } from "./ui.ts";

@@ -23,9 +23,10 @@ import (
 //   dieact:0 打赢后消失 time 秒（预设 120）；dieact:1 打赢后传送（NEWNPCENEMY 的按 OVER 各段的 FREE 条件选 WARP）
 //
 // 打赢后 endmsg 与 additem 给打完时还在场的每个玩家（原版 NPC_NPCEnemy_Dying 跑 Side[0] 的 5 格），steal 与传送只对队长（Entry[0]）。
-// 没做的部分：开打前 CHAR_talkToCliAndParty 的话只对自己说、NEWTIME/Time_Msg（NPC_NPCEnemyWatch 的时间，数据没用到）、
+// 没做的部分：NEWTIME/Time_Msg（NPC_NPCEnemyWatch 的时间，数据没用到）、
 // sktype（BATTLE_EnemyRandowSetSkill，数据没用到）、_NPC_REPLACEMENT 的 REPLACEMENT（Check_EnemyWarpMe，数据没用到）、
-// 道场弟子的随机外形（NPC_NPCEnemyInit 的 gymbody：NPC 照 .create 的图号；战斗中第一个敌人用 NPC 的图号与名字）、
+// 道场弟子 NPC 本身的随机外形（NPC_NPCEnemyInit 的 gymbody：NPC 照 .create 的图号；战斗中第一个敌人用 NPC 的图号与名字，
+// 其余的人形敌人照 ENEMY_createEnemy 随机外形、属性、武器与技能，见 gymRandomize）、
 // 战斗类型 BATTLE_TYPE_BOSS_BATTLE（客户端放 BOSS 音乐用，协议里还没有）、道场的 norisk（还没有战败惩罚）。
 
 const (
@@ -275,10 +276,23 @@ func (w *World) npcEnemyReply(p, n *entity, win *npcWindow, button int, _ string
 	w.npcEnemyBattleIn(p, n)
 }
 
-// npcEnemySay：参数里有 key 就让 NPC 说那句（CHAR_talkToCliAndParty / CHAR_talkToCli）。
+// npcEnemySay：参数里有 key 就让 NPC 说那句（CHAR_talkToCliAndParty：说给说话的人和他的队员听）。
 func (w *World) npcEnemySay(p, n *entity, key string) {
 	if msg, ok := data.ArgField(n.npc.Arg, key); ok {
-		w.npcSay(p, n, msg)
+		w.npcSayParty(p, n, msg)
+	}
+}
+
+// npcSayParty 是 CHAR_talkToCliAndParty：对 p 和 p 队伍里的每个人说。
+func (w *World) npcSayParty(p, n *entity, msg string) {
+	w.npcSay(p, n, msg)
+	if p.party == nil {
+		return
+	}
+	for _, m := range p.party.slots {
+		if m != nil && m != p && m.client != nil {
+			w.npcSay(m, n, msg)
+		}
 	}
 }
 
@@ -367,13 +381,14 @@ func (w *World) npcEnemies(arg string) []*battle.Fighter {
 	for i, s := range specs {
 		s.DropRate = w.Rules.DropRate
 		out[i] = battle.NewEnemy(s, battle.EnemySlot(i), bd.Skills, w.rnd)
+		w.gymRandomize(out[i], s.Enemy.ID)
 	}
 	return out
 }
 
 // doujyouEnemies 是 Doujyou_GetEnemy（mode 2）：enemyno 里随机一个、enemypetno 里随机一个（有写的话），等级都是 gym；
 // 第一个用 NPC 的形象与名字（BATTLE_CreateVsEnemy）。
-// 原版 ENEMY_createEnemy 对道场的人形敌人另外随机属性、武器与技能（DoujyouRandomWeponSet / EnemyGymSkill），这里没做。
+// 道场的人形敌人与宠物另外随机外形、属性、武器与技能（ENEMY_createEnemy 的 DoujyouRandomWeponSet / EnemyGymSkill，gymRandomize）。
 func (w *World) doujyouEnemies(n *entity, level int) []*battle.Fighter {
 	bd := w.game.Battle
 	pick := func(key string) *battle.EnemySpec {
@@ -404,9 +419,51 @@ func (w *World) doujyouEnemies(n *entity, level int) []*battle.Fighter {
 	for i, s := range specs {
 		s.DropRate = w.Rules.DropRate
 		out[i] = battle.NewEnemy(s, battle.EnemySlot(i), bd.Skills, w.rnd)
+		w.gymRandomize(out[i], s.Enemy.ID)
 	}
 	out[0].Name, out[0].Sprite = n.name, n.sprite
 	return out
+}
+
+// gymSkills 是 enemy.c 的 EnemyGymSkill：道场敌人随机拿到的技能（这台服务端开着的宏都算进去）。
+var gymSkills = []int{3, 10, 11, 12, 30, 31, 40, 41, 50, 51, 52, 60, 61, 80, 90, 100, 110, 150, 151, 152,
+	210, 503, 504, 540, 541, 542, 543, 544, 545, 546, 547, 548, 575, 600, 601, 628, 633, 634, 635}
+
+// gymRandomize 是 ENEMY_createEnemy 里的 ENEMY_RandomChange：敌人编号（ENEMY_ID）564..580 / 739..750 / 895..906 是道场的人形敌人（门下生等）：随机一个玩家外形（gymbody）、
+// 地火属性随机 ±100 相抵、水风拿剩下的（work2）、随机一件武器（DoujyouRandomWeponTbl：空手、斧、棍、枪、弓、回力镖、投掷）——
+// 远程武器（弓、回力镖、投掷）只会普通攻击，否则前两格技能从 EnemyGymSkill 随机；655..720 / 859..894 / 907..940 是宠物：只随机两个技能。
+func (w *World) gymRandomize(f *battle.Fighter, enemyID int) {
+	in := func(a, b int) bool { return enemyID >= a && enemyID <= b }
+	human := in(564, 580) || in(739, 750) || in(895, 906)
+	pet := in(655, 720) || in(859, 894) || in(907, 940)
+	if !human && !pet {
+		return
+	}
+	skills := w.game.Battle.Skills
+	randSkills := func() {
+		for i := 0; i < 2; i++ {
+			f.Skills[i] = skills[gymSkills[w.rnd.IntN(len(gymSkills))]]
+		}
+	}
+	if pet {
+		randSkills()
+		return
+	}
+	f.Sprite = 100000 + 20*w.rnd.IntN(12) + 5*w.rnd.IntN(4)
+	work := (w.rnd.IntN(21) - 10) * 10
+	work2 := 100 - abs(work)
+	if w.rnd.IntN(2) == 1 {
+		work2 = -work2
+	}
+	f.Attr = [4]int{max(0, work), max(0, work2), max(0, -work), max(0, -work2)} // 地水火风（原版负值就是另一边的属性）
+	weapons := []int{-1, data.ItemFist, data.ItemAxe, data.ItemClub, data.ItemSpear, data.ItemBow, data.ItemBoomerang, data.ItemBoundThrow, data.ItemBreakThrow}
+	f.Weapon = weapons[w.rnd.IntN(len(weapons))]
+	switch f.Weapon {
+	case data.ItemBow, data.ItemBoomerang, data.ItemBoundThrow, data.ItemBreakThrow:
+		f.Skills[0], f.Skills[1] = skills[0], skills[0] // PETSKILL_NORMALATTACK
+	default:
+		randSkills()
+	}
 }
 
 // npcEnemySteal 是 NPC_NPCEnemy_StealItem：item 里每个编号收走道具栏（含装备）里第一件（整格）；第一个就没有时停下。
@@ -469,15 +526,22 @@ func (w *World) npcEnemyDying(p, n *entity, members []*entity) {
 		w.warpTo(p, data.Atoi(fl), data.Atoi(x), data.Atoi(y))
 		return
 	}
-	if pt, ok := w.npcEnemyCheckFree(p, n); ok && pt != [3]int{} {
+	if pt, party, ok := w.npcEnemyCheckFree(p, n); ok && pt != [3]int{} {
+		if !party { // CHECKPARTY:FALSE：队长带着全队一起传（NPC_WarpAllMsg），不是队长就不传
+			if p.party == nil || p.isLeader() {
+				w.warpTo(p, pt[0], pt[1], pt[2])
+			}
+			return
+		}
+		w.leaveParty(p, false) // CHAR_DischargeParty：拆队，只传说话的人
 		w.warpTo(p, pt[0], pt[1], pt[2])
 	}
 }
 
 // npcEnemyCheckFree 是 NPC_NPCEnemy_CheckFree（_NEW_WARPMAN）：以 OVER 分开的各段里，找第一个含 NEWEVENT、FREE 条件成立、
 // 而且写了 WARP 的段：说那段的 endmsg，WARP 以 ";" 分开的几个点随机取一个（楼层不对时用第一个），执行那段的动作。
-// CHECKPARTY:FALSE（只传送队伍）要有组队，这里没做，当作一般的情形。
-func (w *World) npcEnemyCheckFree(p, n *entity) ([3]int, bool) {
+// 回传的 party 是原版的 *Party：那段写了 CHECKPARTY:FALSE 时为 false（队长带全队传送、不执行动作），否则拆队只传自己。
+func (w *World) npcEnemyCheckFree(p, n *entity) ([3]int, bool, bool) {
 	for _, b := range strings.Split(n.npc.Arg, "OVER") {
 		if !strings.Contains(b, "NEWEVENT") {
 			continue
@@ -493,6 +557,10 @@ func (w *World) npcEnemyCheckFree(p, n *entity) ([3]int, bool) {
 		if !ok {
 			continue
 		}
+		party := true
+		if cp, ok := data.ArgField(b, "CHECKPARTY"); ok && strings.Contains(cp, "FALSE") {
+			party = false
+		}
 		var pts [][3]int
 		for _, s := range strings.Split(spec, ";") {
 			if s == "" || len(pts) == 15 {
@@ -502,16 +570,18 @@ func (w *World) npcEnemyCheckFree(p, n *entity) ([3]int, bool) {
 			pts = append(pts, [3]int{data.Atoi(v[0]), data.Atoi(v[1]), data.Atoi(v[2])})
 		}
 		if len(pts) == 0 {
-			return [3]int{}, true
+			return [3]int{}, party, true
 		}
 		i := w.rnd.IntN(len(pts))
 		if pts[i][0] <= 0 {
 			i = 0
 		}
-		w.runEventAction(p, b) // Action_RunDoEventAction
-		return pts[i], true
+		if party {
+			w.runEventAction(p, b) // Action_RunDoEventAction
+		}
+		return pts[i], party, true
 	}
-	return [3]int{}, false
+	return [3]int{}, true, false
 }
 
 // npcEnemyHide 是 NPC_NPCEnemy_Dying 的 dieact:0：图号设为 0（这里用 TimeMan 的消失图号，hidden() 为真）、从大家的视野里拿掉，

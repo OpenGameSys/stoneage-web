@@ -228,7 +228,6 @@ func itemParams(def *data.ItemDef, it *Item) string {
 }
 
 // itemDamage 是 _ADD_SHOW_ITEMDAMAGE 的耐久度文字：没有耐久的"不会损坏"，否则是剩下的百分比。
-// 这台服务端没定义 _TAKE_ITEMDAMAGE，装备不会按耐久磨损（只有极低机率的 BATTLE_ItemCrush 降能力，还没做），所以一律是 100%。
 // itemDamage 是 _ADD_SHOW_ITEMDAMAGE 的耐久度显示（item.c）：(目前/1000)×100/(最大/1000) 的百分比，最大耐久小于 1 的"不会损坏"。
 func itemDamage(def *data.ItemDef, it *Item) string {
 	if def.Durability < 1 {

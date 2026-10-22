@@ -14,7 +14,6 @@ import { FieldPanel } from "./fieldpanel.ts";
 import { BattleScreen } from "./battle.ts";
 import { Shop } from "./shop.ts";
 import { PetSkillShop, drawPetSelect } from "./petshop.ts";
-import { AutoMap } from "./automap.ts";
 import { loadAi } from "./ai.ts";
 import { AiMemory } from "./aismart.ts";
 import type { AddressEntry, CharSummary, GmEntry, GmItem, PartyMember, QuestEntry, S2CBattleEnd, S2CFamilyStatus, S2CGmDetail, S2CInventory, S2CNpcWindow, S2CPets, S2CStatus, ServerGroup } from "./proto.gen.ts";
@@ -83,7 +82,6 @@ let modal: Modal | null = null;
 
 // 道具店（shop.ts）：回传照 NPC 窗口的 NpcWindowReply，data 是原版的字串
 const BAG_SLOTS = 45, EQUIP_SLOTS = 9;
-const autoMap = new AutoMap(assets, ASSETS);
 addEventListener("pagehide", (e) => { field?.saveSeen(); if (!e.persisted) renderer.dispose(); }); // 真的关掉页面时交还显存
 const petSkillShop = new PetSkillShop();
 const shop = new Shop({
@@ -303,6 +301,11 @@ const app: App = {
     c.on("TradePet", (m) => { if (m.pets[0]) tradeWnd()?.partnerPet(m.pets[0]); });
     c.on("TradeState", (m) => tradeWnd()?.partnerState(m.state));
     c.on("TradeClose", () => tradeWnd()?.close());
+    const menusOf = () => screen instanceof FieldScreen ? screen.menus : null;
+    c.on("VendorSetup", (m) => menusOf()?.openVendorSetup(m.entries));
+    c.on("VendorList", (m) => menusOf()?.openVendorList(m));
+    c.on("VendorClose", () => menusOf()?.vendor.close(false));
+    c.on("VendorDetail", (m) => menusOf()?.vendor.setDetail(m));
     // 名片匣与邮件（lssproto_AB / ABI / MSG_recv）
     const mailWnd = () => screen instanceof FieldScreen ? screen.menus.mail : null;
     c.on("AddressBook", (m) => { addressBook = m.entries; mailWnd()?.setBook(m.entries); });
@@ -477,6 +480,8 @@ class FieldScreen implements Screen {
     party: () => party,
     selfId: () => field?.self?.id ?? -1,
     trade: (cmd, slot, amount) => app.net?.send({ t: "Trade", cmd, slot, amount }),
+    vendor: (cmd, title, kinds, slots, prices) => app.net?.send({ t: "Vendor", cmd, title, kinds, slots, prices }),
+    partyKick: (slot) => app.net?.send({ t: "PartyKick", slot }),
     action: (no) => { const s = field?.self; if (s) { app.net?.send({ t: "Action", x: s.x, y: s.y, action: no }); s.setAct(no); } },
     emote: (spr) => { if (field?.self) field.self.emote = spr; },
     planet: () => app.lineName,
@@ -508,11 +513,8 @@ class FieldScreen implements Screen {
       app.go(new CharSelectScreen(app));
     },
     settingsChanged: () => { if (field) field.hideOthers = settings.hideOthers; applyCursor(); audio.apply(); },
-    map: () => {
-      const s = field?.self;
-      if (!field || !s || field.floor < 0) return null;
-      return { name: field.floorName, x: s.x, y: s.y, canvas: autoMap.render(field, s.x, s.y) };
-    },
+    field: () => field,
+    assets, root: ASSETS,
     family: (text) => app.net?.send({ t: "Family", text }),
     fmReply: (win, button, data) => app.net?.send({ t: "NpcWindowReply", id: win.id, seq: win.seq, button, data }),
     walking: () => !!field?.self?.moving(performance.now()),
@@ -634,6 +636,7 @@ class FieldScreen implements Screen {
         setTimeout(() => this.input?.focus(), 0);
       }
     }
+    f.locked = this.menus.vendor.open || !!f.self?.vendor; // 摆着摊 / 看着摊位不能走（iOnStreetVendor）
     f.wantDir = this.input || battle ? -1 : keyDir(); // 快速战斗中留在地图画面，但不能走
     this.encountFrame(f, now);
 
@@ -725,7 +728,7 @@ class FieldScreen implements Screen {
     }
     // 右上角：楼层名与坐标（原版的小地图位置）
     const s = f.self;
-    if (s && !this.menus.items.open && !this.menus.mapOpen && !this.menus.actions.open) {
+    if (s && !this.menus.items.open && !this.menus.mapOpen && !this.menus.actions.open && !this.menus.vendor.open) {
       ui.text(792 - measure(`${f.floorName}  ${s.x},${s.y}`), 68, `${f.floorName}  ${s.x},${s.y}`, FONT.WHITE);
       if (!this.menus.windowOpen() && !modal) this.menus.quests.hud(ui); // 追踪中的任务
     }
@@ -754,6 +757,7 @@ class FieldScreen implements Screen {
     party: (join) => app.net?.send({ t: "Party", request: join ? 1 : 0 }),
     card: () => app.net?.send({ t: "CardExchange" }),
     trade: () => app.net?.send({ t: "Trade", cmd: "request", slot: 0, amount: 0 }),
+    vendor: () => app.net?.send({ t: "Vendor", cmd: "open", title: "", kinds: [], slots: [], prices: [] }),
     joinBattle: () => app.net?.send({ t: "JoinBattle" }),
     duel: () => app.net?.send({ t: "Duel" }),
     family: () => this.menus.openFamily(),
