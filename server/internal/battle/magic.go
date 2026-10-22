@@ -21,7 +21,7 @@ import (
 //	MAGIC_FieldAttChange / AttReverse 战场属性、属性反转
 //	MAGIC_MagicStatusChange          魔抗（抗魔值 +n%）/ 铁壁（防御 +n..n+19%）；火 / 电 / 冰抗是职业技能用的，这里没有效果
 //	MAGIC_AttMagic                   攻击魔法（attmagic.bin 的范围，_FIX_MAGICDAMAGE 的公式与熟练度）
-// MAGIC_Metamo（变身）只在地图上有意义；ToCallDragon（召唤）、AttSkill 还没做，当作没有效果。
+// MAGIC_Metamo（变身）只在地图上有意义；ToCallDragon（召唤龙）与 AttSkill（装备的技能咒术）在 item2.go。
 
 // MagicSkill 是魔法熟练度（CHAR_EARTH_EXP.. / EARTH_RESIST.. / ATTMAGIC_EXP.. / DEFMAGIC_EXP..，地水火风），
 // 玩家与宠物才有，由世界层保存；Fighter.Mag 指向世界层的那一份，战斗中直接改。

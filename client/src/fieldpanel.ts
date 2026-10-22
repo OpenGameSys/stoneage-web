@@ -6,7 +6,7 @@
 //     任务查询（原图 55237 不在资源里，用旧的 26248 / 26249）在 (rx + 115, 33)
 //   有窗口开着时整排按钮都不画（drawFieldButtonFlag = 0）；送出的按钮共用 500 毫秒的间隔（FIELD_BTN_PUSH_WAIT）。
 // 与原版不同：骑宠查询、队长切换、商城的图不在资源里（这台服务端按了也没有作用），不画；右上的昼夜条原版要裁在底图的小窗里，
-// 这里画固定的 CG_FIELD_MENU_RIGHT_BACK 26121；摆摊、任务查询还没做（按了说尚未开放）。
+// 这里画固定的 CG_FIELD_MENU_RIGHT_BACK 26121；摆摊与任务查询的窗口自己画（vendor.ts、quests.ts）。
 
 import { FONT, boxColor, type Ui } from "./ui.ts";
 
@@ -40,6 +40,7 @@ export interface PanelHost {
   party(join: boolean): void;        // lssproto_PR_send
   card(): void;                      // lssproto_AAB_send
   trade(): void;                     // Ctrl+T → TD "D|D"
+  vendor(): void;                    // 摆摊钮（lssproto_STREET_VENDOR_send "O|"）
   joinBattle(): void;                // lssproto_JB_send
   duel(): void;                      // lssproto_DU_send
   family(): void;                    // 家族功能
@@ -96,8 +97,8 @@ export class FieldPanel {
     tip("fp-trade", "进行交易。");
     if (btn(h.broadcast() ? CG.FAMILY + 1 : CG.FAMILY, 115, 28, "fp-family", CG.FAMILY + 1)) h.family();
     tip("fp-family", "家族功能。");
-    if (btn(CG.VENDOR, 176, 19, "fp-vendor", CG.VENDOR - 1)) h.chat("摆摊功能尚未开放。", FONT.RED);
-    tip("fp-vendor", "摆摊功能。");
+    if (btn(CG.VENDOR, 176, 19, "fp-vendor", CG.VENDOR - 1) && !h.walking() && this.canSend()) h.vendor();
+    tip("fp-vendor", "摆摊：面前没人时设定自己的摊位；面向摆摊的人就看他的摊位。");
 
     // 右上
     ui.image(CG.RIGHT, RX + 54, 33);

@@ -78,6 +78,7 @@ func TestHostileClientInputs(t *testing.T) {
 		"SetFlags":         func() { w.SetFlags(id, I()) },
 		"PartyRequest":     func() { w.PartyRequest(id, I()) },
 		"PartyKick":        func() { w.PartyKick(id, I()) },
+		"Vendor":           func() { w.Vendor(id, S(), S(), []int{I(), I()}, []int{I(), I()}, []int{I(), I()}) },
 		"BattleHelp":       func() { w.BattleHelp(id, B()) },
 		"JoinBattle":       func() { w.JoinBattle(id) },
 		"PetSkillUse":      func() { w.PetSkillUse(id, I(), I(), S()) },

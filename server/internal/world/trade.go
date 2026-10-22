@@ -19,7 +19,7 @@ import (
 //	取消     对方"%s将交易取消了！"，自己"交易取消！"
 //
 // 与原版不同：交换在拷贝上做完再一起写回（原版失败时不还原）；骑着的宠物服务端也挡（原版只有客户端挡）；
-// 对方下线、开打、被传走时交易取消（原版要等下一次放东西才发现）；交易中头上的记号（CHAR_ACTTRADE）没做；
+// 对方下线、开打、被传走时交易取消（原版要等下一次放东西才发现）；交易中头上的记号（CHAR_ACTTRADE）由 ObjMark.trade 送；
 // 楼层 50000 的 PK 交易（_TRADE_PK）没做。
 
 // tradeSide 是交易的一边（TradeList 的一格）。
@@ -131,6 +131,8 @@ func (w *World) tradeRequest(e *entity) {
 		e.trade, o.trade = t, t
 		e.client.Send(&proto.TradeOpen{ID: o.id, Name: o.name})
 		o.client.Send(&proto.TradeOpen{ID: e.id, Name: e.name})
+		w.broadcastMark(e) // 交易中的记号（CHAR_sendTradeEffect）
+		w.broadcastMark(o)
 	}
 }
 
@@ -336,6 +338,7 @@ func (w *World) tradeFinish(t *trade, ok bool) {
 			w.sysMsg(e, "交易失败！", colorYellow)
 		}
 		e.client.Send(&proto.TradeClose{})
+		w.broadcastMark(e)
 		w.itemsChanged(e)
 		w.petsChanged(e)
 		w.saveProgress(e)
@@ -352,6 +355,7 @@ func (w *World) tradeCancel(e *entity) {
 	for _, s := range t.sides {
 		s.e.trade = nil
 		s.e.client.Send(&proto.TradeClose{})
+		w.broadcastMark(s.e)
 		w.sendPets(s.e) // 客户端放上去时藏起来的宠物重新显示
 	}
 	w.sysMsg(other.e, fmt.Sprintf("%s将交易取消了！", e.name), colorYellow)

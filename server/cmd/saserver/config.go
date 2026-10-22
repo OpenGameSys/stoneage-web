@@ -48,13 +48,14 @@ type RulesConfig struct {
 	WorldLevel    int     `yaml:"worldLevel"`     // 世界频道要几级
 	WorldFame     int     `yaml:"worldFame"`      // 世界频道每句扣的声望（内部值，100 = 1 点）
 	BusStep       int     `yaml:"busStep"`        // 长毛象巴士 / 加美航空每走一步的毫秒数（越小越快，100..2000）
+	VendorTax     int     `yaml:"vendorTax"`      // 摆摊卖出时抽的税（百分比，0..100；原版 0）
 }
 
 func rulesConfig(r world.Rules) RulesConfig {
 	return RulesConfig{ExpRate: r.ExpRate, ShareExp: r.ShareExp, DropRate: r.DropRate, EncounterRate: r.EncounterRate,
 		TurnTime: int(r.TurnTime / time.Second), LevelUpPoints: r.LevelUpPoints, GroundItem: int(r.GroundItem / time.Second),
 		GroundPet: int(r.GroundPet / time.Second), GroundGold: int(r.GroundGold / time.Second), FamilyFee: r.FamilyFee,
-		NoEscape: r.NoEscapeFloors, WorldTrans: r.WorldTrans, WorldLevel: r.WorldLevel, WorldFame: r.WorldFame, BusStep: int(r.BusStep / time.Millisecond)}
+		NoEscape: r.NoEscapeFloors, WorldTrans: r.WorldTrans, WorldLevel: r.WorldLevel, WorldFame: r.WorldFame, BusStep: int(r.BusStep / time.Millisecond), VendorTax: r.VendorTax}
 }
 
 // world 检查数值的范围，换成 world.Rules。
@@ -67,6 +68,8 @@ func (c RulesConfig) world() (world.Rules, error) {
 		return world.Rules{}, errors.New("rules.turnTime 要在 5..300 秒")
 	case c.BusStep < 100 || c.BusStep > 2000:
 		return world.Rules{}, errors.New("rules.busStep 要在 100..2000 毫秒")
+	case c.VendorTax < 0 || c.VendorTax > 100:
+		return world.Rules{}, errors.New("rules.vendorTax 要在 0..100")
 	case c.LevelUpPoints < 0 || c.FamilyFee < 0:
 		return world.Rules{}, errors.New("rules.levelUpPoints、familyFee 不能是负数")
 	case c.GroundItem < 1 || c.GroundPet < 1 || c.GroundGold < 1:
@@ -77,7 +80,7 @@ func (c RulesConfig) world() (world.Rules, error) {
 	return world.Rules{ExpRate: c.ExpRate, ShareExp: c.ShareExp, DropRate: c.DropRate, EncounterRate: c.EncounterRate,
 		TurnTime: sec(c.TurnTime), LevelUpPoints: c.LevelUpPoints, GroundItem: sec(c.GroundItem), GroundPet: sec(c.GroundPet),
 		GroundGold: sec(c.GroundGold), FamilyFee: c.FamilyFee,
-		NoEscapeFloors: c.NoEscape, WorldTrans: c.WorldTrans, WorldLevel: c.WorldLevel, WorldFame: c.WorldFame, BusStep: time.Duration(c.BusStep) * time.Millisecond}, nil
+		NoEscapeFloors: c.NoEscape, WorldTrans: c.WorldTrans, WorldLevel: c.WorldLevel, WorldFame: c.WorldFame, BusStep: time.Duration(c.BusStep) * time.Millisecond, VendorTax: c.VendorTax}, nil
 
 }
 

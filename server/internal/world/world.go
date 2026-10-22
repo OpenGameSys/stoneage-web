@@ -74,6 +74,8 @@ type entity struct {
 	cep              int       // 遇敌值（原版 CONNECT_get_CEP）
 	watch            *battleRoom // 正在观战的那场（watch.go），不能走动
 	bus              *bus        // 会走动的 NPC（bus.go）：巴士 / 飞机的路线与状态
+	stall            *vendorStall // 摆着的摊位（vendor.go，CHAR_WORKSTREETVENDOR 1 / 2）
+	buying           *entity      // 正在看谁的摊位（CHAR_WORKSTREETVENDOR 3）
 	warOut           bool        // 家族对战里倒下 / 逃跑过，等着被送出场（fmwar.go）
 	gm               bool      // 账号在 World.GMs 里（上线时定）
 	questDirty       bool      // 任务旗标改过、任务日志还没重送（quest.go）
@@ -104,7 +106,7 @@ func (e *entity) hidden() bool { return e.npc != nil && e.sprite == timeManHidde
 func (e *entity) info() proto.ObjInfo {
 	m := e.mark() // 头上的队长 / 战斗记号（CHAR_sendCharaAtWalk 补送的 CA）
 	return proto.ObjInfo{ID: e.id, Kind: e.kind, Name: e.name, Sprite: e.sprite, X: e.x, Y: e.y, Dir: e.dir, Level: e.level,
-		Leader: m.Leader, Battle: m.Battle, Help: m.Help, Action: e.act - 1, Family: e.fm.Name}
+		Leader: m.Leader, Battle: m.Battle, Help: m.Help, Action: e.act - 1, Family: e.fm.Name, Trade: m.Trade, Vendor: m.Vendor}
 }
 
 type World struct {
@@ -414,6 +416,7 @@ func (w *World) Leave(charID int, cl Client) {
 func (w *World) leave(e *entity) {
 	w.abandonBattle(e)
 	w.cancelTrade(e)
+	w.vendorClear(e)
 	w.dropItemsAtLogout(e)
 	w.leaveParty(e, true) // _CHAR_logout：CHAR_DischargeParty
 	w.removeFromFloor(e)
@@ -433,8 +436,8 @@ func (w *World) Move(charID, x, y, dir int) {
 		if e == nil {
 			return
 		}
-		if e.fight != nil || e.watch != nil || e.isFollower() || e.trade != nil {
-			// 战斗中（含观战）不能走；队员不能自己走（CHAR_walk_init 只收转身）；交易中不能走
+		if e.fight != nil || e.watch != nil || e.isFollower() || e.trade != nil || e.stall != nil || e.buying != nil {
+			// 战斗中（含观战）不能走；队员不能自己走（CHAR_walk_init 只收转身）；交易中不能走；摆摊中、看别人的摊位时也不能走（iOnStreetVendor）
 			e.client.Send(&proto.PosCorrect{X: e.x, Y: e.y, Dir: e.dir})
 			return
 		}
@@ -714,7 +717,8 @@ func (w *World) MapReq(charID, floor, x1, y1, x2, y2 int) {
 		e := w.players[charID]
 		f := w.game.Floors[floor]
 		// 先把座标限制在楼层附近再相减：极端值（±MaxInt）相减会溢出，绕过边长检查后 make 负长度就 panic
-		if e == nil || f == nil || floor != e.floor || x1 < -MaxMapReq || y1 < -MaxMapReq || x2 > f.W+MaxMapReq || y2 > f.H+MaxMapReq ||
+		// 不限楼层：世界地图看去过的别层时会补要那一层看过的格子（地图资料不是秘密，一次最多 64×64）
+		if e == nil || f == nil || x1 < -MaxMapReq || y1 < -MaxMapReq || x2 > f.W+MaxMapReq || y2 > f.H+MaxMapReq ||
 			x2 <= x1 || y2 <= y1 || x2-x1 > MaxMapReq || y2-y1 > MaxMapReq {
 			return
 		}
@@ -934,6 +938,7 @@ func (w *World) placeOnFloor(e *entity, floor, x, y, dir int) {
 	e.stay = false
 	e.clearAction()
 	w.cancelTrade(e)
+	w.vendorClear(e)
 	w.removeFromFloor(e)
 	e.floor, e.x, e.y, e.dir = floor, x, y, dir
 	w.addToFloor(e)

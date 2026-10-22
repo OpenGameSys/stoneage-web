@@ -30,7 +30,7 @@ import (
 //     成分全部落在范围内（加工：数值 / 倍率 .. 数值 × 倍率、最多 2500；料理：0.7 .. 1.3 倍）且成分数正好等于那个数目的、
 //     又不是材料本身的，随机挑一个；找 5 次都没有就随机还你一样材料。做出来的道具标上 ITEM_MERGEFLG（名字黄色、魔术笔能改名）。
 //
-// 没做的部分：家族守护兽（CHAR_PETFAMILY）与家族料理、合成经验（_COMPOUND_EXP 的 CHAR_MATERIAL，只给私服的评定能力用）；
+// 没做的部分：合成经验（_COMPOUND_EXP 的 CHAR_MATERIAL，只给私服的评定能力用；原版的加工没有家族守护兽 / 家族料理的特别处理）；
 // _MAX_MERGE_LEVEL 的上限 MAXMERGELEVEL 在 setup.cf 里没有设（= 0，原版会让所有加工都失败），这里当作不限。
 
 // randRow 是 ItemRandTableForItem 的一档（ITEM_initRandTable）。

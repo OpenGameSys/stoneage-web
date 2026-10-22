@@ -6,7 +6,7 @@
 //   聊天设定（2）、音效设定（3）、背景音乐（4）、滑鼠设定（6）
 // 坐标都是原版 800×600 模式下的值（这些窗口原版用 lpDraw->xSize 居中或固定在左上角，不再平移）。
 
-import type { PartyMember, S2CNpcWindow, S2CPets, S2CStatus } from "./proto.gen.ts";
+import type { PartyMember, S2CNpcWindow, S2CPets, S2CStatus, S2CVendorList, VendorEntry } from "./proto.gen.ts";
 import { FONT, SYS, measure, type Ui } from "./ui.ts";
 import { ItemWindow } from "./items.ts";
 import { TradeWindow } from "./trade.ts";
@@ -14,7 +14,10 @@ import { ActionWindow } from "./actions.ts";
 import { MailWindow } from "./mail.ts";
 import { FamilyWindow } from "./family.ts";
 import { PetWindow } from "./pets.ts";
-import { AutoMap } from "./automap.ts";
+import { MapWindow } from "./worldmap.ts";
+import { VendorWindow } from "./vendor.ts";
+import type { Field } from "./field.ts";
+import type { Assets } from "./assets.ts";
 import { AiWindow } from "./aisetting.ts";
 import { GmWindow } from "./gm.ts";
 import { QuestWindow } from "./quests.ts";
@@ -104,7 +107,9 @@ export interface MenuHost {
   logout(): void;                             // 原地登出 → 角色选择
   settingsChanged(): void;
   /** 地图窗口：楼层名、自己的格子座标、画好的自动地图（还没进地图时为 null） */
-  map(): { name: string; x: number; y: number; canvas: HTMLCanvasElement } | null;
+  field(): Field | null;                        // 地图窗口（worldmap.ts）要看的格子资料
+  assets: Assets;
+  root: string;                                 // 资源根目录（地图取平均色要读图集）
   family(text: string): void;                   // lssproto_FM_send
   fmReply(win: S2CNpcWindow, button: number, data: string): void; // 家族窗口的 WN 回传
   walking(): boolean;
@@ -115,6 +120,8 @@ export interface MenuHost {
   gmList(kind: string): void;                   // GM 窗口的清单（GmListReq）
   gmDetail(kind: string, id: number): void;     // 清单里一项的详情（GmDetailReq）
   questReq(): void;                             // 任务日志（QuestReq，打开任务窗口时要一次）
+  vendor(cmd: string, title: string, kinds: number[], slots: number[], prices: number[]): void; // 摆摊（Vendor）
+  partyKick(slot: number): void;                // 状态窗口队伍页的踢人（lssproto_KTEAM_send）
 
 
   autoEncount(): boolean;                       // 自动遇敌开着没有
@@ -150,6 +157,8 @@ export class Menus {
   readonly petWnd: PetWindow;
   readonly gm: GmWindow;
   readonly quests: QuestWindow;
+  readonly mapWnd: MapWindow;
+  readonly vendor: VendorWindow;
 
   constructor(ui: Ui, host: MenuHost) {
     this.ui = ui; this.host = host;
@@ -174,6 +183,12 @@ export class Menus {
     this.gm = new GmWindow({
       ui, canvas: host.canvas, send: (t) => host.gmSend(t), list: (k) => host.gmList(k), detail: (k, id) => host.gmDetail(k, id), place: () => host.place(),
       status: () => host.status, pets: () => (this.pets?.pets ?? []).filter((p) => p.slot >= 0 && p.slot < 5).sort((a, b) => a.slot - b.slot),
+    });
+    this.mapWnd = new MapWindow({ ui, assets: host.assets, root: host.root, field: () => host.field() });
+    this.vendor = new VendorWindow({
+      ui, canvas: host.canvas, items: () => this.items.inv.items, pets: () => this.pets?.pets ?? [], ridePet: () => this.pets?.ride ?? -1,
+      gold: () => this.items.inv.gold, send: (cmd, title = "", kinds = [], slots = [], prices = []) => host.vendor(cmd, title, kinds, slots, prices),
+      chat: (t, c) => host.chat(t, c),
     });
     this.quests = new QuestWindow({ ui, chat: (t, c) => host.chat(t, c), se: (no) => host.uiSe(no), refresh: () => host.questReq() });
     this.actions = new ActionWindow({ ui, act: (no) => host.action(no), emote: (spr) => host.emote(spr) });
@@ -207,13 +222,13 @@ export class Menus {
   /** 有窗口开着（CheckMenuFlag 等：这时画面上方的按钮不画） */
   windowOpen(): boolean {
     return this.statusOpen || this.mapOpen || this.systemOpen || this.petWnd.open || this.items.open || album.open
-      || this.actions.open || this.trade.open || this.ai.open || this.mail.open || this.family.open || this.gm.open || this.quests.open;
+      || this.actions.open || this.trade.open || this.ai.open || this.mail.open || this.family.open || this.gm.open || this.quests.open || this.vendor.open;
   }
 
   /** 开着几个窗口（主程序按它的增减放开窗口 202 / 关窗口 203 的声音） */
   openCount(): number {
     return [this.statusOpen, this.mapOpen, this.systemOpen, this.petWnd.open, this.items.open, album.open, this.actions.open,
-      this.trade.open, this.ai.open, this.mail.open, this.family.open, this.gm.open, this.quests.open].filter(Boolean).length;
+      this.trade.open, this.ai.open, this.mail.open, this.family.open, this.gm.open, this.quests.open, this.vendor.open].filter(Boolean).length;
   }
 
   // 原版 menu.cpp：打开道具窗口时关掉地图（MenuToggleFlag &= ~JOY_CTRL_M），打开地图时关掉道具窗口（&= ~JOY_CTRL_I）
@@ -226,13 +241,13 @@ export class Menus {
   toggleQuests() { const open = !this.quests.open; if (open) this.closeOthers(); this.quests.toggle(); }
   // 相簿（Ctrl+A / 任务栏）：打开时关掉道具与地图以外的窗口（MenuToggleFlag &= JOY_CTRL_I | JOY_CTRL_M）
   toggleAlbum() { const open = !album.open; if (open) this.closeOthers(); album.open = open; }
-  toggleStatus() { const open = !this.statusOpen; if (open) this.closeOthers(); this.statusOpen = open; }
+  toggleStatus() { const open = !this.statusOpen; if (open) this.closeOthers(); this.statusOpen = open; this.statusPage = 0; }
   togglePets() { const open = !this.petWnd.open; if (open) this.closeOthers(); this.petWnd.toggle(); }
-  toggleMap() { this.mapOpen = !this.mapOpen; if (this.mapOpen && this.items.open) this.items.toggle(); }
+  toggleMap() { this.mapOpen = !this.mapOpen; if (this.mapOpen) { this.mapWnd.reset(); if (this.items.open) this.items.toggle(); } }
   toggleSystem() { const open = !this.systemOpen; if (open) this.closeOthers(); this.systemOpen = open; this.page = "main"; }
 
   /** 离开地图画面（进战斗、登出）：拿掉宠物改名的 DOM 输入框 */
-  leave() { this.petWnd.leave(); this.gm.leave(); }
+  leave() { this.petWnd.leave(); this.gm.leave(); this.vendor.close(false); }
 
   /** 战斗胜利后的结果窗口（menu.cpp BattleResultWndFlag），RESULT_WND_CLOSE_TIME 300 帧后自动关闭 */
   showResult(name: string, exp: number, lvUp: boolean, items: string[], pets: ResultPet[] = []) {
@@ -240,6 +255,16 @@ export class Menus {
   }
 
   setPets(m: S2CPets) { this.pets = m; }
+
+  /** 摆摊的设定窗口（VendorSetup）与购买窗口（VendorList）：和交易一样，其他窗口都关掉 */
+  openVendorSetup(entries: VendorEntry[]) {
+    this.closeOthers(); this.mapOpen = false; if (this.items.open) this.items.toggle();
+    this.vendor.openSetup(entries);
+  }
+  openVendorList(m: S2CVendorList) {
+    if (!this.vendor.open) { this.closeOthers(); this.mapOpen = false; if (this.items.open) this.items.toggle(); }
+    this.vendor.openBuy(m);
+  }
 
   /** TD C：打开交易窗口，其他窗口都关掉（DeathMenuAction） */
   openTrade(name: string) {
@@ -271,6 +296,7 @@ export class Menus {
     this.mail.frame(this.rects);
     this.family.frame(this.rects, this.host.esc());
     this.quests.frame(this.rects, this.host.esc());
+    this.vendor.frame(this.rects, this.host.esc());
     this.gm.frame(this.rects, this.host.esc());
   }
 
@@ -315,33 +341,15 @@ export class Menus {
   }
 
   // ---------------- 地图窗口 ----------------
-  // menu.cpp mapWndNo 0：MakeWindowDisp(388, 4, 248, 240, 0, -1)，800 模式 x > 320 加 DISPLACEMENT_X（160）→ (548, 4)。
-  // 底图 CG_MAP_WND 画在中心；楼层名 (22, 31)；东 / 南座标 (61, 186)、(134, 186) 黄字；关闭钮在 (mx, 222)；
-  // 自动地图（sprdisp.cpp drawAutoMap）从 (18, 118) 起画，自己那一格每秒在白、黑之间闪。
-  private mapWindow() {
-    const ui = this.ui, wx = 548, wy = 4, w = 248, h = 240, mx = wx + w / 2, my = wy + h / 2;
-    ui.hitBox(wx, wy, wx + w, wy + h, "map-wnd", false);
-    this.rects.push([wx, wy, wx + w, wy + h]);
-    ui.image(CG.MAP_WND, mx, my);
-    const m = this.host.map();
-    if (m) {
-      const ox = wx + 17, oy = wy + 118 - 55; // automap.ts：画布原点
-      ui.pic(m.canvas, ox, oy);
-      const [dx, dy] = AutoMap.center(), cx = ox + dx, cy = oy + dy;
-      const c = Math.floor(performance.now() / 1000) % 2 ? "#ffffff" : "#000000";
-      ui.box(cx - 1, cy, cx + 2, cy + 1, c, true);
-      ui.box(cx, cy - 1, cx + 1, cy, c, true);
-      ui.text(wx + 22, wy + 31, m.name, FONT.WHITE);
-      ui.text(wx + 61, wy + 186, `东 ${String(m.x).padStart(3)}`, FONT.YELLOW);
-      ui.text(wx + 61 + 73, wy + 186, `南 ${String(m.y).padStart(3)}`, FONT.YELLOW);
-    }
-    if (ui.image(CG.CLOSE_BTN, mx, wy + 186 + 36, "map-close") && ui.clicked("map-close")) this.mapOpen = false;
-  }
+  // 地图窗口：世界地图（worldmap.ts），原版的小自动地图窗口（CG_MAP_WND）不再用
+  private mapWindow() { this.mapWnd.frame(this.rects, () => { this.mapOpen = false; }); }
 
   // ---------------- 状态窗口 ----------------
   // MakeWindowDisp(4, 4, 272, 360, 0, -1)：无边框窗口，中心 (mx, my) = (140, 184)，底图 CG_STATUS_WND 画在中心。
   // 字段位置按 _CHARTITLE_STR_ 定义、_NEW_CHARDATA_ 不用时的分支。
+  private statusPage = 0; // statusWndNo：0 状态、1 队伍
   private statusWindow() {
+    if (this.statusPage === 1) { this.statusPartyWindow(); return; }
     const ui = this.ui, st = this.host.status;
     const wx = 4, wy = 4, mx = wx + 136, my = wy + 180;
     ui.hitBox(wx, wy, wx + 272, wy + 360, "status-wnd", false);
@@ -368,7 +376,7 @@ export class Menus {
     ui.text(x + 61, y, num(st.tgh, 3), FONT.WHITE);
     ui.text(x + 61 + 120, y, num(st.dex, 3), FONT.WHITE); y += 20;
     y += 17;
-    if (ui.image(CG.STATUS_GROUP_BTN, x + 59, y, "st-group") && ui.clicked("st-group")) this.host.chat("队伍功能尚未开放。", FONT.RED);
+    if (ui.image(CG.STATUS_GROUP_BTN, x + 59, y, "st-group") && ui.clicked("st-group")) { this.statusPage = 1; this.host.uiSe(202); } // statusWndNo = 1
     if (ui.image(CG.CLOSE_BTN, x + 173, y, "st-close") && ui.clicked("st-close")) this.statusOpen = false;
     // 头像：_CHARTITLE_STR_ 的 (209+1, 118+13) 是配 _NEW_CHARDATA_ 底图 55266 的，导出资源里没有那张图，
     // 用的是 CG_STATUS_WND，所以取配它的 (209, 118)（量过底图头像框中心在 (210, 119)）
@@ -414,6 +422,38 @@ export class Menus {
       }
       y += 20;
     }
+  }
+
+  // statusWndNo 1：队伍页（menu.cpp：MakeWindowDisp(4, 0, 256, 456) 配底图 CG_STATUS_WND_GROUP_WND，那张图不在这套资源里，自己画）：
+  // 自己与宠物的 ＭＰ / ＨＰ，下面是队员的 ＭＰ / ＨＰ；队长每个队员旁有踢人钮（_TEAM_KICKPARTY：CG_MAIL_WND_DELETE_BTN → lssproto_KTEAM_send）
+  private statusPartyWindow() {
+    const ui = this.ui, st = this.host.status, wx = 4, wy = 4;
+    ui.window(wx, wy, 4, 7, "status-party");
+    this.rects.push([wx, wy, wx + 256, wy + 336]);
+    ui.box(wx + 22, wy + 10, wx + 234, wy + 326, "rgba(0,0,0,0.45)", true);
+    if (!st) return;
+    const x = wx + 26;
+    let y = wy + 18;
+    ui.text(x, y, "队伍", FONT.YELLOW); ui.text(x + 104, y, "ＭＰ", FONT.AQUA); ui.text(x + 146, y, "ＨＰ", FONT.AQUA); y += 20;
+    const row = (name: string, mp: number | null, hp: number, maxHp: number, color: string) => {
+      ui.text(x, y, name.length > 7 ? name.slice(0, 7) : name, color);
+      if (mp !== null) ui.text(x + 104, y, String(mp), FONT.WHITE);
+      ui.text(x + 146, y, `${hp}/${maxHp}`, FONT.WHITE);
+      y += 18;
+    };
+    row(st.name, st.mp, st.hp, st.maxHp, FONT.WHITE);
+    for (const p of (this.pets?.pets ?? []).filter((p) => p.slot >= 0 && p.slot < 5).sort((a, b) => a.slot - b.slot)) row("　" + (p.freeName || p.name), null, p.hp, p.maxHp, FONT.GRAY);
+    y += 6; ui.box(x, y, x + 204, y + 1, "rgba(255,255,255,0.25)", true); y += 10;
+    const party = this.host.party(), me = this.host.selfId(), leader = party[0]?.id === me;
+    const members = party.map((m, slot) => ({ m, slot })).filter((v): v is { m: PartyMember; slot: number } => !!v.m && v.m.id !== me);
+    if (members.length === 0) ui.text(x, y, "没有组队。", FONT.GRAY);
+    for (const { m, slot } of members) {
+      const ry = y;
+      row(m.name, m.mp, m.hp, m.maxHp, FONT.WHITE);
+      if (leader && ui.text(x + 190, ry, "踢", FONT.RED, `st-kick${slot}`)) this.host.partyKick(slot);
+      if (ui.hovered(`st-kick${slot}`)) ui.bottomLine = `把 ${m.name} 踢出队伍。`;
+    }
+    if (ui.image(CG.CLOSE_BTN, wx + 128, wy + 300, "st-pclose") && ui.clicked("st-pclose")) { this.statusPage = 0; this.host.uiSe(203); }
   }
 
   // MakeWindowDisp(320-160, 240-120, 5, 6, CG_WND_TITLE_RESULT) 在 800 模式下平移到 (240, 180)

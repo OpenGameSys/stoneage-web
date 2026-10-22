@@ -39,6 +39,10 @@ const (
 // condCheck 是 NPC_ActionBigSmallCheck：按 "<"、">"、"!="、"=" 的顺序找比较符；"ITEM=编号*个数" 要持有那么多个、
 // "ITEM=编号^个数" 要正好那么多个（_NPC_ActionFreeCmp）。"-" 之后是宠物编号（_NEW_WARPMAN 的 PET 条件）。
 func (w *World) condCheck(p *entity, c string) bool {
+	if strings.HasPrefix(c, "GTIME") { // NPC_CheckTimeDefine：右边是时段的名字（AM / PM / ALLNIGHT…），不是数字
+		_, opt, _ := strings.Cut(c, "=")
+		return w.timeDefine(opt)
+	}
 	temp := -1
 	if l, r, ok := strings.Cut(c, "-"); ok {
 		c, temp = l, data.Atoi(r)
@@ -79,7 +83,9 @@ func compare(want, have, flg int) bool {
 }
 
 // freeIf 是 NPC_ActionFreeIfCheck 里这里有对应数据的几项：等级、金钱、转生、道具栏里的道具、装备、任务旗标（ENDEV/NOWEV）、宠物、
-// 庄园（MANOR=n：是庄园 n（0 起）的家族的正式族人；FM=楼层：正式族人而且占有的庄园的族长家是那一层）。组队、时间等一律不成立。
+// 庄园（MANOR=n：是庄园 n（0 起）的家族的正式族人；FM=楼层：正式族人而且占有的庄园的族长家是那一层）、
+// 组队（PARTY / PARTYCOUNT 队伍人数、MANCOUNT / WOMANCOUNT 队伍里男 / 女生的人数）、时间（TIME 时段 0..3）、决斗（DP）。
+// DR（强者表名次）要查整个资料库，一律不成立。
 func (w *World) freeIf(p *entity, name string, n, flg, temp int) bool {
 	c := &p.char
 	switch name {
@@ -109,6 +115,16 @@ func (w *World) freeIf(p *entity, name string, n, flg, temp int) bool {
 		return n > -1 && p.fm.formal() && p.fm.Manor == n
 	case "FM":
 		return p.fm.formal() && p.fm.Floor == n
+	case "PARTY", "PARTYCOUNT": // NPC_ActionPartyCheck / NPC_ActionPartyCountCheck：队伍人数（没组队算 0）
+		return compare(n, w.partySize(p), flg)
+	case "MANCOUNT": // NPC_ActionManCountCheck：队伍里（没组队就是自己）男生的人数
+		return compare(n, w.partyGender(p, true), flg)
+	case "WOMANCOUNT":
+		return compare(n, w.partyGender(p, false), flg)
+	case "TIME": // NPC_TiemCheck：getLSTime 的时段（0 夜 1 早 2 午 3 晚）
+		return compare(n, lsSection(w.saHour()), flg)
+	case "DP": // NPC_ActionDuelPointCheck
+		return compare(n, c.DP, flg)
 	case "EQUIT": // NPC_ActioneEquitCheck：装备中的道具
 		for i := 0; i < data.EquipSlots; i++ {
 			if it := p.inv[i]; it != nil && compare(n, it.ID, flg) {
@@ -231,4 +247,64 @@ const (
 // sysMsg 是 CHAR_talkToCli(talker, -1, ...)：不带说话者的系统文字。
 func (w *World) sysMsg(p *entity, text string, color int) {
 	p.client.Send(&proto.ChatMsg{Channel: "near", Text: text, Color: color})
+}
+
+// partySize 是 NPC_ActionPartyCheck 数的人数：没组队 0，否则队伍里的人数（含自己）。
+func (w *World) partySize(p *entity) int {
+	if p.party == nil {
+		return 0
+	}
+	n := 0
+	for _, m := range p.party.slots {
+		if m != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// partyGender 是 NPC_ActionManCountCheck / WomanCountCheck：没组队就看自己，否则数队伍里的男 / 女生。
+func (w *World) partyGender(p *entity, male bool) int {
+	count := func(e *entity) int {
+		if isMale(e.char.Sprite) == male {
+			return 1
+		}
+		return 0
+	}
+	if p.party == nil {
+		return count(p)
+	}
+	n := 0
+	for _, m := range p.party.slots {
+		if m != nil {
+			n += count(m)
+		}
+	}
+	return n
+}
+
+// isMale 是 char_base.c IsMale：玩家形象 100000 + 20k + 5j 里 k 0..5 是男生（SPR_001em..SPR_054em），6..11 是女生。
+func isMale(sprite int) bool {
+	return sprite >= 100000 && sprite < 100240 && (sprite-100000)/20 < 6
+}
+
+// timeDefine 是 NPC_CheckTimeDefine：参数里含 TimeTble 的哪个字就用那一段 SA 时（npc_eventaction.c 的 YOAKE 700、NICHIBOTU 300、
+// SHOUGO 125、YONAKA 500）：born < dead 时要在 (born, dead) 之间，否则跨过 0 点。
+func (w *World) timeDefine(opt string) bool {
+	table := []struct {
+		name       string
+		born, dead int
+	}{{"ALLNIGHT", 301, 700}, {"ALLNOON", 701, 300}, {"AM", 501, 125}, {"PM", 126, 500}, {"FORE", 701, 125},
+		{"AFTER", 126, 300}, {"EVNING", 301, 500}, {"MORNING", 501, 700}, {"FREE", 0, 1024}}
+	for _, t := range table {
+		if !strings.Contains(opt, t.name) {
+			continue
+		}
+		h := w.saHour()
+		if t.born < t.dead {
+			return t.born < h && h < t.dead
+		}
+		return (t.born < h && h < 1024) || (0 < h && h < t.dead)
+	}
+	return false
 }

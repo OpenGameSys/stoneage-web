@@ -21,7 +21,7 @@ import (
 //	之后      "决斗"开关关掉（每次都要再开）；在庄园竞技场（1042、2032、3032、4032）打过的 120 秒内不能 PK
 //	强者表    Duelranking NPC：看前十名或自己附近的名次，每页 10 人（原版在 AC 的 db_duel，这里直接查资料库）
 //
-// 没做：观战（BATTLE_WatchTry）、胜败连胜的计数（DUELBATTLECOUNT 等，强者表也没用到）、乱舞 PK（_AUTO_PK 的 NPC 没有摆）。
+// 观战在 watch.go。没做：胜败连胜的计数（DUELBATTLECOUNT 等，强者表也没用到）、乱舞 PK（_AUTO_PK 的 NPC 没有摆）。
 
 const (
 	duelSelectSeq = 23  // CHAR_WINDOWTYPE_SELECTDUEL

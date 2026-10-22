@@ -22,6 +22,8 @@ type Rules struct {
 	WorldTrans, WorldLevel, WorldFame int
 	// BusStep 是长毛象巴士 / 加美航空每走一步的间隔（原版 NPC_BUS_LOOPTIME 200 ms）；客户端按这个节奏连续播走路动画，乘客跟着走
 	BusStep time.Duration
+	// VendorTax 是摆摊卖出时抽的税（百分比；setup.cf STREETVENDORPOINT 的第一项是石币摊位的税率，原版 0）
+	VendorTax int
 }
 
 // DefaultRules 是原版的规则，另外经验共享预设开着。
