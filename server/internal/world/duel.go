@@ -244,7 +244,7 @@ func (w *World) duelRankingOpen(p, n *entity) {
 
 // duelRankingReply 处理强者表的两种窗口。
 func (w *World) duelRankingReply(p, n *entity, seq, button int, sel string) {
-	if chebyshev(p, n) > 1 {
+	if chebyshev(p, n) > 1 || w.dbBusy(p) {
 		return
 	}
 	switch seq {

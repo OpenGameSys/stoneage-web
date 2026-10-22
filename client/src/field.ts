@@ -7,7 +7,7 @@ import { album } from "./album.ts";
 import { ANIM, findAction, type AnimAction, type Assets } from "./assets.ts";
 import { sfx } from "./audio.ts";
 import type { Connection } from "./net.ts";
-import type { ObjInfo, S2CEnterFloor, S2CMapData } from "./proto.gen.ts";
+import type { ObjInfo, S2CEnterFloor, S2CMapData, NpcPos } from "./proto.gen.ts";
 import type { Quad } from "./renderer.ts";
 
 export const MOVE: [number, number][] = [[-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
@@ -227,6 +227,7 @@ export class Field {
     net.on("Self", (m) => { this.self = new Actor({ id: m.id, kind: "player", name: m.name, sprite: m.sprite, x: 0, y: 0, dir: 0 }); });
     net.on("EnterFloor", (m) => this.enterFloor(m));
     net.on("MapData", (m) => this.mapData(m));
+    net.on("NpcList", (m) => { this.npcLists.set(m.floor, m.npcs); this.npcPending.delete(m.floor); });
     net.on("PosCorrect", (m) => { this.corrections++; this.self?.warpTo(m.x, m.y, m.dir); this.target = null; this.waitingWarp = false; });
     net.on("ObjAppear", (m) => { for (const o of m.objs) { this.actors.set(o.id, new Actor(o)); album.seen(o.sprite); } }); // 相簿的"看到"（CheckNewPet）
     net.on("ObjDisappear", (m) => { for (const id of m.ids) this.actors.delete(id); });
@@ -259,6 +260,7 @@ export class Field {
 
   private enterFloor(m: S2CEnterFloor) {
     this.followSteps = [];
+    this.forgetNpcs(m.floor); // 这一层的 NPC 清单重新要（巴士会动、按时间出现的人会变）
     this.saveSeen();
     if (this.floor >= 0) this.cache.set(this.floor, { name: this.floorName, tiles: this.tiles, objs: this.objs, walk: this.walk, seen: this.seen, version: this.mapVersion, seenVersion: this.seenVersion });
     this.floor = m.floor; this.floorName = m.name; this.palette = m.palette;
@@ -375,6 +377,18 @@ export class Field {
       this.net.send({ t: "MapReq", floor: v.floor, x1: bx, y1: by, x2: ex, y2: ey });
     }
   }
+
+  /** 世界地图用：一层楼全部 NPC 的位置（NpcListReq → NpcList），没有就先向服务端要、这次回 null */
+  private npcLists = new Map<number, NpcPos[]>();
+  private npcPending = new Set<number>();
+  npcList(floor: number): NpcPos[] | null {
+    const l = this.npcLists.get(floor);
+    if (l) return l;
+    if (!this.npcPending.has(floor)) { this.npcPending.add(floor); this.net.send({ t: "NpcListReq", floor }); }
+    return null;
+  }
+  /** 换了楼层就把那一层的清单作废（巴士会动、按时间出现的人会变） */
+  forgetNpcs(floor: number) { this.npcLists.delete(floor); }
 
   /** 地图资料每到一批加一，自动地图据此重画 */
   mapVersion = 0;

@@ -263,7 +263,7 @@ func (w *World) dropPet(e *entity, slot int) {
 func (w *World) PickUp(charID, dir int) {
 	w.Do(func() {
 		e := w.players[charID]
-		if e == nil || e.fight != nil || dir >= 8 {
+		if e == nil || e.busy() || dir >= 8 {
 			return
 		}
 		tiles := [][2]int{{e.x, e.y}}

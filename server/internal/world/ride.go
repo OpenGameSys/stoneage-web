@@ -38,13 +38,13 @@ func (w *World) rideSprite(e *entity) int {
 	return w.mountSprite(e, p.Sprite)
 }
 
-// mountSprite 是 FamilyRideFunction 的全部：先查证书 / 老虎 / 固定配对（data.Ride.Sprite），再查庄园骑宠（Pointpetlist：
-// 家族占有庄园、守护精灵颜色对、不是申请中的人）；骑不了回 0。
+// mountSprite 是 FamilyRideFunction 的全部：先查证书 / 老虎 / 固定配对（data.Ride.Sprite），再查庄园骑宠（Pointpetlist）。
+// 庄园骑宠原版要家族占有庄园、守护精灵颜色对、不是申请中的人；这里改成不看家族，用那个庄园的骑乘书（左迪洛斯 / 巴朵兰恩骑乘书）学会就能骑。骑不了回 0。
 func (w *World) mountSprite(e *entity, petSprite int) int {
 	if s := w.game.Ride.Sprite(e.char.Sprite, w.weaponSprite(e), petSprite, e.pets.Licence[0]); s != 0 {
 		return s
 	}
-	if i := w.game.Ride.ManorIndex(petSprite); i >= 0 && e.fm.Index > 0 && e.fm.Duty != fmDutyApply && w.game.Ride.ManorOK(i, e.fm.Floor, e.fm.Sprite) {
+	if i := w.game.Ride.ManorIndex(petSprite); i >= 0 && e.pets.Licence[0]&(1<<w.game.Ride.ManorLicence(i)) != 0 {
 		return w.game.Ride.ManorSprite(e.char.Sprite, i)
 	}
 	return 0
@@ -57,6 +57,9 @@ func (w *World) PetRide(charID, slot int) {
 		e := w.players[charID]
 		if e == nil {
 			return
+		}
+		if e.trade != nil || e.stall != nil || e.buying != nil {
+			return // 放在交易桌 / 摊位上的宠物不能骑（骑着的也不能放上去）
 		}
 		if e.fight != nil {
 			w.sysMsg(e, "战斗中不可骑宠！", colorYellow)
@@ -98,7 +101,7 @@ func (w *World) PetRide(charID, slot int) {
 		}
 		if w.mountSprite(e, p.Sprite) == 0 {
 			if w.game.Ride.ManorIndex(p.Sprite) >= 0 {
-				w.sysMsg(e, "只有占有庄园、守护精灵颜色相符的家族成员才能骑这只。", colorYellow)
+				w.sysMsg(e, "要先用这只庄园骑宠的骑乘书学会才能骑。", colorYellow)
 			}
 			return
 		}
@@ -133,14 +136,9 @@ func (w *World) rideInfo(e *entity, p *Pet) string {
 	}
 	if w.mountSprite(e, p.Sprite) == 0 {
 		if mi := w.game.Ride.ManorIndex(p.Sprite); mi >= 0 {
-			switch {
-			case e.fm.Index <= 0 || e.fm.Duty == fmDutyApply:
-				need = append(need, "加入占有庄园的家族（庄园骑宠）")
-			case e.fm.Floor == 0:
-				need = append(need, "家族要先占有庄园")
-			case w.game.Ride.ManorKind[mi] != e.fm.Sprite:
-				need = append(need, "家族的守护精灵颜色不对（蓝暴要光明、红暴要黑暗）")
-			default:
+			if e.pets.Licence[0]&(1<<w.game.Ride.ManorLicence(mi)) == 0 {
+				need = append(need, "先用这只庄园骑宠的骑乘书学会")
+			} else {
 				need = append(need, "你的人物形象骑不了这只")
 			}
 		} else if i := w.game.Ride.LicenceIndex(p.Sprite); i >= 0 && e.pets.Licence[0]&(1<<i) == 0 {

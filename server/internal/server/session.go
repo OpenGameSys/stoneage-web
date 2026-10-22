@@ -31,11 +31,13 @@ const (
 	msgsPerSecond = 40
 	idleTimeout   = 90 * time.Second
 	loginTimeout  = 30 * time.Second // 还没登录的连线最多挂这么久
-	minPassword   = 8
-	charNameLen   = 8 // 原客户端 CHAR_NAME_LEN 为 16 字节，即 8 个汉字
+	charNameLen   = 8                // 原客户端 CHAR_NAME_LEN 为 16 字节，即 8 个汉字
 )
 
 var accountRe = regexp.MustCompile(`^[A-Za-z0-9_]{3,16}$`)
+
+// passwordRe：客户端送来的是密码的 MD5（32 位十六进制，client/src/md5.ts）；密码本身的长度（8..64）由客户端检查
+var passwordRe = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
 
 // Line 是一条线路（原版的一台 gmsv）。同一大区的线路共用账号与角色，但世界互相独立。
 type Line struct {
@@ -217,6 +219,9 @@ func (s *session) handle(ctx context.Context, m proto.Message) {
 		s.Send(&proto.Pong{Seq: p.Seq, ServerTime: int(time.Now().Unix())})
 		return
 	}
+	if s.account.ID != 0 && s.handleAccount(ctx, m) {
+		return
+	}
 	switch {
 	case s.account.ID == 0:
 		s.handleAuth(ctx, m)
@@ -227,12 +232,67 @@ func (s *session) handle(ctx context.Context, m proto.Message) {
 	}
 }
 
+// handleAccount 是登录后（不管在哪个阶段）都能用的账号指令：个人信息、改密码、改安全码。改密码 / 改安全码都要先验目前的密码，
+// 验错按账号名记次数（和登录一样连错 AuthFailLimit 次锁住，免得登录后的连线被拿来猜密码）。回传 true 表示这条消息处理过了。
+func (s *session) handleAccount(ctx context.Context, m proto.Message) bool {
+	st := s.srv.Store
+	switch m := m.(type) {
+	case *proto.AccountInfoReq:
+		info, err := st.AccountInfo(ctx, s.account.ID)
+		if err != nil {
+			s.Send(&proto.AccountResult{OK: false, Message: "读取账号资料失败"})
+			return true
+		}
+		chars, _ := st.ListCharacters(ctx, s.account.ID)
+		s.Send(&proto.AccountInfo{Account: info.Name, Created: info.CreatedAt.Format("2006-01-02"), Chars: len(chars), HasSecret: info.HasSecret})
+	case *proto.ChangePassword:
+		s.changeAccount(ctx, m.Old, "密码", func() error { return st.SetPassword(ctx, s.account.Name, m.Password) }, m.Password)
+	case *proto.ChangeSecret:
+		s.changeAccount(ctx, m.Password, "安全码", func() error { return st.SetSecret(ctx, s.account.Name, m.Secret) }, m.Secret)
+	default:
+		return false
+	}
+	return true
+}
+
+// changeAccount：验目前的密码（current 是它的 MD5），对了就执行 apply。newValue 也要是 MD5。
+func (s *session) changeAccount(ctx context.Context, current, what string, apply func() error, newValue string) {
+	if !passwordRe.MatchString(current) || !passwordRe.MatchString(newValue) {
+		s.Send(&proto.AccountResult{OK: false, Message: "格式不对"})
+		return
+	}
+	lim := s.srv.limiter()
+	key := "chg:" + strings.ToLower(s.account.Name)
+	if d := lim.locked(key); d > 0 {
+		s.Send(&proto.AccountResult{OK: false, Message: fmt.Sprintf("密码错误次数太多，请 %d 分钟后再试", int(d.Minutes())+1)})
+		return
+	}
+	if !lim.acquireHash(ctx.Done()) {
+		return
+	}
+	_, err := s.srv.Store.Authenticate(ctx, s.account.Name, current)
+	lim.releaseHash()
+	if err != nil {
+		lim.fail(key)
+		s.Send(&proto.AccountResult{OK: false, Message: "目前的密码不对"})
+		return
+	}
+	lim.ok(key)
+	if err := apply(); err != nil {
+		s.log.Error("改"+what+"失败", "account", s.account.Name, "err", err)
+		s.Send(&proto.AccountResult{OK: false, Message: "修改失败，请稍后再试"})
+		return
+	}
+	s.log.Info("玩家改了"+what, "account", s.account.Name, "ip", s.ip)
+	s.Send(&proto.AccountResult{OK: true, Message: what + "已修改"})
+}
+
 func (s *session) handleAuth(ctx context.Context, m proto.Message) {
 	st := s.srv.Store
 	switch m := m.(type) {
 	case *proto.Register:
-		if !accountRe.MatchString(m.Account) || len(m.Password) < minPassword || len(m.Password) > 64 {
-			s.Send(&proto.AuthResult{OK: false, Message: "账号为 3–16 位字母数字下划线，密码 8–64 位"})
+		if !accountRe.MatchString(m.Account) || !passwordRe.MatchString(m.Password) || !passwordRe.MatchString(m.Secret) {
+			s.Send(&proto.AuthResult{OK: false, Message: "账号为 3–16 位字母数字下划线，密码与安全码要先算成 MD5"})
 			return
 		}
 		if s.srv.GMs[strings.ToLower(m.Account)] {
@@ -248,7 +308,7 @@ func (s *session) handleAuth(ctx context.Context, m proto.Message) {
 		if !lim.acquireHash(ctx.Done()) {
 			return
 		}
-		a, err := st.CreateAccount(ctx, m.Account, m.Password)
+		a, err := st.CreateAccount(ctx, m.Account, m.Password, m.Secret)
 		lim.releaseHash()
 		if errors.Is(err, store.ErrExists) {
 			s.Send(&proto.AuthResult{OK: false, Message: "账号已存在"})
@@ -261,8 +321,44 @@ func (s *session) handleAuth(ctx context.Context, m proto.Message) {
 		s.account = a
 		s.Send(&proto.AuthResult{OK: true, Message: "注册成功"})
 		s.sendServerList()
+	case *proto.ResetPassword:
+		// 找回密码：账号 + 安全码 → 新密码。安全码连错 AuthFailLimit 次锁住（来源 IP 与账号名各算，和登录一样每次加倍）
+		if !accountRe.MatchString(m.Account) || !passwordRe.MatchString(m.Secret) || !passwordRe.MatchString(m.Password) {
+			s.Send(&proto.AuthResult{OK: false, Message: "账号或安全码错误"})
+			return
+		}
+		lim := s.srv.limiter()
+		ipKey, accKey := "rip:"+s.ip, "racc:"+strings.ToLower(m.Account)
+		if d := max(lim.locked(ipKey), lim.locked(accKey)); d > 0 {
+			s.Send(&proto.AuthResult{OK: false, Message: fmt.Sprintf("安全码错误次数太多，请 %d 分钟后再试", int(d.Minutes())+1)})
+			return
+		}
+		if !lim.acquireHash(ctx.Done()) {
+			return
+		}
+		err := st.ResetPassword(ctx, m.Account, m.Secret, m.Password)
+		lim.releaseHash()
+		switch {
+		case errors.Is(err, store.ErrNoSecret):
+			s.Send(&proto.AuthResult{OK: false, Message: "这个账号没有设定安全码，无法找回密码"})
+		case err != nil:
+			lim.fail(ipKey)
+			if d := lim.fail(accKey); d > 0 {
+				s.log.Warn("安全码连续错误，暂时锁住", "account", m.Account, "lock", d)
+			}
+			s.Send(&proto.AuthResult{OK: false, Message: "账号或安全码错误"})
+		default:
+			lim.ok(ipKey)
+			lim.ok(accKey)
+			s.log.Info("用安全码重设了密码", "account", m.Account, "ip", s.ip)
+			s.Send(&proto.AuthResult{OK: false, Message: "密码已重设，请用新密码登录"}) // OK 为 false：没有登录，客户端留在登录页
+		}
 	case *proto.Login:
-		// 限速：来源 IP 与账号名各算，连错 authFailLimit 次锁一阵子（每次加倍）；同时算哈希的连线数有上限
+		if !passwordRe.MatchString(m.Password) {
+			s.Send(&proto.AuthResult{OK: false, Message: "账号或密码错误"})
+			return
+		}
+		// 限速：来源 IP 与账号名各算，连错 authFailLimit 次锁一阵子（每次加倍）；同时查库的连线数有上限
 		lim := s.srv.limiter()
 		ipKey, accKey := "ip:"+s.ip, "acc:"+strings.ToLower(m.Account)
 		if d := max(lim.locked(ipKey), lim.locked(accKey)); d > 0 {
@@ -339,7 +435,12 @@ func (s *session) handleLobby(ctx context.Context, m proto.Message) {
 		}
 		s.sendCharList(ctx)
 	case *proto.CharEnter:
-		// 顶号的顺序：先把旧连线踢掉、等它在自己的协程里下线、等旧线路把存档写完，然后才读角色，
+		// 先确认角色属于这个账号（否则任何人送别人的角色编号就能把人踢下线），再做顶号
+		if _, err := st.GetCharacter(ctx, s.account.ID, int64(m.ID)); err != nil {
+			s.fail("not_found", "角色不存在")
+			return
+		}
+		// 顶号的顺序：先把旧连线踢掉、等它在自己的协程里下线、等旧线路把存档写完，然后才（再）读角色，
 		// 否则读到的是旧存档（刚交易 / 丢掉的道具又回来）
 		s.srv.mu.Lock()
 		if s.srv.online == nil {
@@ -397,6 +498,8 @@ func (s *session) handleWorld(m proto.Message) {
 		w.Turn(id, m.Dir)
 	case *proto.MapReq:
 		w.MapReq(id, m.Floor, m.X1, m.Y1, m.X2, m.Y2)
+	case *proto.NpcListReq:
+		w.NpcList(id, m.Floor)
 	case *proto.Talk:
 		w.Talk(id, m.ID)
 	case *proto.Chat:

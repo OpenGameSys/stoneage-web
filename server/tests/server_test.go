@@ -1,4 +1,4 @@
-package server
+package tests
 
 import (
 	"context"
@@ -16,9 +16,13 @@ import (
 
 	"sa/server/internal/data"
 	"sa/server/internal/proto"
+	"sa/server/internal/server"
 	"sa/server/internal/store"
 	"sa/server/internal/world"
 )
+
+// 客户端送的是密码的 MD5（32 位十六进制）
+const testPw = "5f4dcc3b5aa765d61d8327deb882cf99"
 
 // 端到端：真实的 WebSocket 连接 → 会话 → 世界，数据用仓库里的原版数据。
 
@@ -31,9 +35,9 @@ type client struct {
 func startServer(t *testing.T) string { return startServerWith(t, nil) }
 
 // startServerWith 起一台测试服务端，configure 可以先改 Server 的设定（GM 名单等）。
-func startServerWith(t *testing.T, configure func(*Server)) string {
+func startServerWith(t *testing.T, configure func(*server.Server)) string {
 	t.Helper()
-	const dir = "../../../gamedata"
+	const dir = "../../gamedata"
 	if _, err := os.Stat(dir); err != nil {
 		t.Skip("没有原版数据")
 	}
@@ -47,15 +51,15 @@ func startServerWith(t *testing.T, configure func(*Server)) string {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ctx, cancel := context.WithCancel(context.Background())
-	var lines []*Line
+	var lines []*server.Line
 	for i, name := range []string{"一线", "二线"} {
 		w := world.New(game, db, log, int64(i+1))
 		// 世界频道的门槛（5 转 140 级、扣声望）在 world 的测试里测，这里只测转送
 		w.Rules.WorldTrans, w.Rules.WorldLevel, w.Rules.WorldFame = 0, 0, 0
 		go w.Run(ctx)
-		lines = append(lines, &Line{ID: i + 1, Group: "测试区", Name: name, World: w})
+		lines = append(lines, &server.Line{ID: i + 1, Group: "测试区", Name: name, World: w})
 	}
-	sv := &Server{Lines: lines, Store: db, Log: log, Origins: []string{"*"}}
+	sv := &server.Server{Lines: lines, Store: db, Log: log, Origins: []string{"*"}}
 	if configure != nil {
 		configure(sv)
 	}
@@ -135,7 +139,7 @@ func validCreate(name string) *proto.CharCreate {
 
 // login 注册账号、选线路、创建角色、进入世界，返回角色 ID。
 func (c *client) login(account, name string, line int) int {
-	c.send(&proto.Register{Account: account, Password: "secret-pw1"})
+	c.send(&proto.Register{Account: account, Password: testPw, Secret: testSecret})
 	if r := c.expect("AuthResult"); r["ok"] != true {
 		c.t.Fatalf("注册失败：%v", r)
 	}
@@ -202,7 +206,7 @@ func TestTwoPlayers(t *testing.T) {
 
 	// 同一角色从另一条线路登录：旧连接被踢（跨线路），新连接接管；一线的 a 看到鲍勃离开
 	b2 := dial(t, url)
-	b2.send(&proto.Login{Account: "bob01", Password: "secret-pw1"})
+	b2.send(&proto.Login{Account: "bob01", Password: testPw})
 	b2.expect("AuthResult")
 	b2.send(&proto.SelectLine{ID: 2})
 	b2.expect("LineSelected")
@@ -226,7 +230,7 @@ func TestTwoPlayers(t *testing.T) {
 func TestCreateRules(t *testing.T) {
 	url := startServer(t)
 	c := dial(t, url)
-	c.send(&proto.Register{Account: "maker", Password: "secret-pw1"})
+	c.send(&proto.Register{Account: "maker", Password: testPw, Secret: testSecret})
 	c.expect("AuthResult")
 	c.expect("ServerList")
 	c.send(validCreate("没选线路"))
@@ -274,7 +278,7 @@ func TestRejectsBeforeLogin(t *testing.T) {
 	if e := c.expect("Error"); e["code"] != "not_logged_in" {
 		t.Fatalf("未登录应被拒绝：%v", e)
 	}
-	c.send(&proto.Login{Account: "nobody", Password: "x"})
+	c.send(&proto.Login{Account: "nobody", Password: "0123456789abcdef0123456789abcdef"})
 	if r := c.expect("AuthResult"); r["ok"] != false {
 		t.Fatal("不存在的账号不应登录成功")
 	}

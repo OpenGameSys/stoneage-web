@@ -70,20 +70,22 @@ type entity struct {
 	visible          map[int]bool // 玩家当前能看到的实体
 	stepTokens       float64
 	lastStep         time.Time
-	npc              *data.NPC // NPC 才有：对话行为与内容
-	cep              int       // 遇敌值（原版 CONNECT_get_CEP）
-	watch            *battleRoom // 正在观战的那场（watch.go），不能走动
-	bus              *bus        // 会走动的 NPC（bus.go）：巴士 / 飞机的路线与状态
+	npc              *data.NPC    // NPC 才有：对话行为与内容
+	cep              int          // 遇敌值（原版 CONNECT_get_CEP）
+	watch            *battleRoom  // 正在观战的那场（watch.go），不能走动
+	bus              *bus         // 会走动的 NPC（bus.go）：巴士 / 飞机的路线与状态
 	stall            *vendorStall // 摆着的摊位（vendor.go，CHAR_WORKSTREETVENDOR 1 / 2）
 	buying           *entity      // 正在看谁的摊位（CHAR_WORKSTREETVENDOR 3）
-	warOut           bool        // 家族对战里倒下 / 逃跑过，等着被送出场（fmwar.go）
-	gm               bool      // 账号在 World.GMs 里（上线时定）
-	questDirty       bool      // 任务旗标改过、任务日志还没重送（quest.go）
-	questSig         string    // 上次送出的任务日志签名（道具栏变动后比对，quest.go refreshQuests）
-	muteUntil        time.Time // GM 的 /mute：这之前不能说话（不存档）
-	worldSentAt      time.Time // 上次在世界频道说话（CHAR_WORKWORLDSENDTIME）
-	chatTokens       float64   // 说话的令牌桶（chatBurst 满、每秒回 chatPerSecond），刷屏的句子直接丢掉
+	warOut           bool         // 家族对战里倒下 / 逃跑过，等着被送出场（fmwar.go）
+	gm               bool         // 账号在 World.GMs 里（上线时定）
+	account          string       // 登录账号名（GM 的 /setpw、/setsecret 用）
+	questDirty       bool         // 任务旗标改过、任务日志还没重送（quest.go）
+	questSig         string       // 上次送出的任务日志签名（道具栏变动后比对，quest.go refreshQuests）
+	muteUntil        time.Time    // GM 的 /mute：这之前不能说话（不存档）
+	worldSentAt      time.Time    // 上次在世界频道说话（CHAR_WORKWORLDSENDTIME）
+	chatTokens       float64      // 说话的令牌桶（chatBurst 满、每秒回 chatPerSecond），刷屏的句子直接丢掉
 	chatAt           time.Time
+	dbAt             time.Time // 上次在世界协程里替它同步查库（传言板、强者表）的时间：刷太快就不理，免得卡住所有人
 
 	fight     *fight             // 战斗中
 	window    *npcWindow         // 打开中的 NPC 窗口
@@ -129,17 +131,21 @@ type World struct {
 	// Rules 是 config.yaml 的 rules（rules.go），开机时设定，之后只读
 	Rules Rules
 	// panics 是 safe 拦下的 panic 次数
-	panics atomic.Int64
-	buses  []*entity // 会走动的 NPC（bus.go tickBuses）
+	panics   atomic.Int64
+	buses    []*entity         // 会走动的 NPC（bus.go tickBuses）
 	warPlace map[int]*warPlace // 对战场的位置（fmwar.go warPlaces，算一次）
-	qhints map[int]string // 事件编号 → 相关 NPC 的提示（quest.go questHints，算一次）
+	qhints   map[int]string    // 事件编号 → 相关 NPC 的提示（quest.go questHints，算一次）
 
-	// saves 是存档队列：由一个协程按顺序写库，保证同一角色的新存档不会被旧存档盖掉
-	saves   chan func()
-	started time.Time          // 开机时间（记录点报"本星球已经启动了…"）
-	timeMen []*entity          // 按时间换图的 NPC（TimeMan）
-	quizzes map[int]*quizState // 角色 ID → 正在进行的猜谜（quiz.go）
-	fam     *Families          // 家族（所有线路共用，family.go）
+	// saves 是存档队列：由一个协程按顺序写库，保证同一角色的新存档不会被旧存档盖掉。
+	// enqueue 按 key 合并：同一个 key 还没写时只换掉要写的内容，不再排一笔（道具栏一秒动 40 次也只写一次），
+	// 队列里顶多每个在线角色各一笔，不会被刷爆而卡住世界协程
+	saves      chan func()
+	saveMu     sync.Mutex
+	saveLatest map[string]func()
+	started    time.Time          // 开机时间（记录点报"本星球已经启动了…"）
+	timeMen    []*entity          // 按时间换图的 NPC（TimeMan）
+	quizzes    map[int]*quizState // 角色 ID → 正在进行的猜谜（quiz.go）
+	fam        *Families          // 家族（所有线路共用，family.go）
 	// inbox 是别的线路送来的事（post），世界协程在 Do 之后与 wake 时做
 	inboxMu sync.Mutex
 	inbox   []func()
@@ -321,7 +327,8 @@ func (w *World) Enter(c store.Character, cl Client) {
 		w.players[e.id] = e
 		w.setLuck(e)
 		if a, ok := cl.(interface{ Account() string }); ok {
-			e.gm = w.GMs[strings.ToLower(a.Account())]
+			e.account = a.Account()
+			e.gm = w.GMs[strings.ToLower(e.account)]
 		}
 		e.inv = parseInventory(c.Items)
 		w.unequipProfession(e)
@@ -507,7 +514,7 @@ func (w *World) Talk(charID, npcID int) {
 			return
 		}
 		n := w.floors[p.floor][npcID]
-		if n == nil || n.npc == nil || n.npc.Function == "" || n.hidden() || p.fight != nil || p.watch != nil {
+		if n == nil || n.npc == nil || n.npc.Function == "" || n.hidden() || p.busy() { // 交易、摆摊中不能找 NPC（CHAR_WORKTRADEMODE）
 			return
 		}
 		dist := max(abs(n.x-p.x), abs(n.y-p.y))
@@ -710,6 +717,25 @@ func sign(v int) int {
 		return -1
 	}
 	return 0
+}
+
+// NpcList 是世界地图要的一层楼全部 NPC 的位置（H5 新增：原版自动地图只画视野内的人）。不限楼层（NPC 站哪里不是秘密），
+// 没名字的（传送点 npcgen_warp 等）与按时间消失的不列；巴士 / 飞机列当下的位置。
+func (w *World) NpcList(charID, floor int) {
+	w.Do(func() {
+		e := w.players[charID]
+		if e == nil || w.game.Floors[floor] == nil {
+			return
+		}
+		m := &proto.NpcList{Floor: floor, Npcs: []proto.NpcPos{}}
+		for _, o := range w.floors[floor] {
+			if o.kind == "npc" && o.name != "" && !o.hidden() {
+				m.Npcs = append(m.Npcs, proto.NpcPos{Name: o.name, X: o.x, Y: o.y})
+			}
+		}
+		slices.SortFunc(m.Npcs, func(a, b proto.NpcPos) int { return strings.Compare(a.Name, b.Name) })
+		e.client.Send(m)
+	})
 }
 
 func (w *World) MapReq(charID, floor, x1, y1, x2, y2 int) {
@@ -1044,7 +1070,30 @@ func (w *World) broadcastMove(e *entity) {
 // save 在后台写库，不阻塞世界协程。
 func (w *World) save(e *entity) {
 	id, fl, x, y, d := e.char.ID, e.floor, e.x, e.y, e.dir
-	w.saves <- func() { w.write(id, fl, x, y, d) }
+	w.enqueue(fmt.Sprintf("pos:%d", id), func() { w.write(id, fl, x, y, d) })
+}
+
+// enqueue 把一笔写库排进存档队列；同一个 key 还在排队时只换成最新的 job（合并），所以每个 key 在队列里顶多一笔。
+func (w *World) enqueue(key string, job func()) {
+	w.saveMu.Lock()
+	if w.saveLatest == nil {
+		w.saveLatest = map[string]func(){}
+	}
+	_, queued := w.saveLatest[key]
+	w.saveLatest[key] = job
+	w.saveMu.Unlock()
+	if queued {
+		return
+	}
+	w.saves <- func() {
+		w.saveMu.Lock()
+		j := w.saveLatest[key]
+		delete(w.saveLatest, key)
+		w.saveMu.Unlock()
+		if j != nil {
+			j()
+		}
+	}
 }
 
 func (w *World) write(id int64, fl, x, y, d int) {

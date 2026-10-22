@@ -34,6 +34,10 @@ type vendorEntry struct {
 	slot  int // 道具栏格位 / 宠物栏格位（SV_INDEX）
 	price int
 	sold  bool
+	// 开张时那一格的内容（买的时候核对，免得店家换了东西还按原价卖）：道具的编号与个数、宠物
+	itemID int
+	pile   int
+	pet    *Pet
 }
 
 // vendorStall 是一个摊位（CHAR_WORKSTREETVENDOR 1 / 2 与贩卖清单）。
@@ -155,6 +159,7 @@ func (w *World) vendorSet(e *entity, title string, kinds, slots, prices []int) {
 				w.sysMsg(e, "丢在地上会消失的道具不可贩卖，该选项取消", colorYellow)
 				continue
 			}
+			v.itemID, v.pile = e.inv[v.slot].ID, e.inv[v.slot].count()
 		case 1:
 			if v.slot < 0 || v.slot >= PetSlots || e.pets.Pets[v.slot] == nil {
 				continue
@@ -171,6 +176,7 @@ func (w *World) vendorSet(e *entity, title string, kinds, slots, prices []int) {
 				w.sysMsg(e, "送信中的宠物无法贩卖，该选项取消", colorYellow)
 				continue
 			}
+			v.pet = p
 		default:
 			continue
 		}
@@ -337,8 +343,8 @@ func (w *World) vendorBuy(b *entity, want []int) {
 		var name string
 		if v.kind == 0 {
 			it := s.inv[v.slot]
-			if it == nil || w.game.Items[it.ID] == nil {
-				v.sold = true
+			if it == nil || w.game.Items[it.ID] == nil || it.ID != v.itemID || it.count() != v.pile {
+				v.sold = true // 那一格的东西和开张时不一样（照理不会：摆着时不能动道具），这项作废
 				continue
 			}
 			if w.addItem(b.inv, it) < 0 {
@@ -349,7 +355,7 @@ func (w *World) vendorBuy(b *entity, want []int) {
 			name = w.game.Items[it.ID].Name
 		} else {
 			p := s.pets.Pets[v.slot]
-			if p == nil {
+			if p == nil || p != v.pet || s.pets.Ride == v.slot {
 				v.sold = true
 				continue
 			}

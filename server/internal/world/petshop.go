@@ -328,6 +328,9 @@ func (w *World) petSell(e *entity, n *entity, i int) string {
 	if e.pets.Ride == i {
 		return "\n\n骑乘中的宠物无法贩卖喔！"
 	}
+	if pet.Away {
+		return "\n\n送信中的宠物无法贩卖喔！"
+	}
 	cost := w.petSellCost(e, n, pet)
 	w.removePet(e, i)
 	e.char.Gold = min(maxGold(e.char.Trans), e.char.Gold+cost) // CHAR_AddGold
@@ -344,6 +347,9 @@ func (w *World) petPool(e *entity, n *entity, i int) string {
 	}
 	if e.pets.Ride == i {
 		return "\n\n骑乘中的宠物无法寄放喔！"
+	}
+	if pet.Away {
+		return "\n\n送信中的宠物无法寄放喔！"
 	}
 	if pet.Guard {
 		return "\n\n家族守护兽无法存入仓库喔！"

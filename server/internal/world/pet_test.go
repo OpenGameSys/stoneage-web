@@ -31,7 +31,7 @@ func enemyFighter(w *World, e *data.Enemy, level, slot int) *battle.Fighter {
 // petOwner 建一个在村子里的角色并上线。
 func petOwner(t *testing.T, w *World, db store.Store, name string, level, charm int) (store.Character, *fakeClient) {
 	t.Helper()
-	acc, _ := db.CreateAccount(context.Background(), name, "pw")
+	acc, _ := db.CreateAccount(context.Background(), name, "pw", "")
 	c, err := db.CreateCharacter(context.Background(), store.Character{AccountID: acc.ID, Name: name, Sprite: 100000, Level: level,
 		Floor: 1000, X: 47, Y: 82, Vital: 20, Str: 20, Tgh: 10, Dex: 10, Earth: 10, Charm: charm})
 	if err != nil {

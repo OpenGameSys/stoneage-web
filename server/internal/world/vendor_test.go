@@ -250,3 +250,26 @@ func TestGymRandomize(t *testing.T) {
 		t.Errorf("外形应随机：%v", sprites)
 	}
 }
+
+// 所有巴士 / 飞机的路线开机都算成逐格路径：同一层的相邻两站之间直线相连、没有跳格（原版巴士不看通行），换楼层才跳。
+func TestBusPathsContiguous(t *testing.T) {
+	w, _, _ := setup(t)
+	jumps := 0
+	for _, n := range w.buses {
+		for _, r := range n.bus.routes {
+			if len(r.path) < 2 || r.path[0] != r.points[0] || r.path[len(r.path)-1] != r.points[len(r.points)-1] {
+				t.Errorf("%s 路线 %s 的路径头尾不对：%v", n.name, r.name, r.points)
+			}
+			for i := 1; i < len(r.path); i++ {
+				a, b := r.path[i-1], r.path[i]
+				if a[0] == b[0] && (abs(a[1]-b[1]) > 1 || abs(a[2]-b[2]) > 1) {
+					jumps++
+					t.Logf("%s 路线 %s 在 %v → %v 之间不相邻", n.name, r.name, a, b)
+				}
+			}
+		}
+	}
+	if jumps > 0 {
+		t.Errorf("有 %d 处同层路线不相邻", jumps)
+	}
+}

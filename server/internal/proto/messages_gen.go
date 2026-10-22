@@ -53,6 +53,12 @@ type ObjInfo struct {
 	Vendor string `json:"vendor"`
 }
 
+type NpcPos struct {
+	Name string `json:"name"`
+	X    int    `json:"x"`
+	Y    int    `json:"y"`
+}
+
 type VendorEntry struct {
 	Index  int    `json:"index"`
 	Kind   int    `json:"kind"`
@@ -344,9 +350,37 @@ func (*Duel) MsgType() string { return "Duel" }
 type Register struct {
 	Account  string `json:"account"`
 	Password string `json:"password"`
+	Secret   string `json:"secret"`
 }
 
 func (*Register) MsgType() string { return "Register" }
+
+type ResetPassword struct {
+	Account  string `json:"account"`
+	Secret   string `json:"secret"`
+	Password string `json:"password"`
+}
+
+func (*ResetPassword) MsgType() string { return "ResetPassword" }
+
+type AccountInfoReq struct {
+}
+
+func (*AccountInfoReq) MsgType() string { return "AccountInfoReq" }
+
+type ChangePassword struct {
+	Old      string `json:"old"`
+	Password string `json:"password"`
+}
+
+func (*ChangePassword) MsgType() string { return "ChangePassword" }
+
+type ChangeSecret struct {
+	Password string `json:"password"`
+	Secret   string `json:"secret"`
+}
+
+func (*ChangeSecret) MsgType() string { return "ChangeSecret" }
 
 type Login struct {
 	Account  string `json:"account"`
@@ -404,6 +438,12 @@ type MapReq struct {
 }
 
 func (*MapReq) MsgType() string { return "MapReq" }
+
+type NpcListReq struct {
+	Floor int `json:"floor"`
+}
+
+func (*NpcListReq) MsgType() string { return "NpcListReq" }
 
 type Move struct {
 	X   int `json:"x"`
@@ -826,6 +866,22 @@ type AuthResult struct {
 
 func (*AuthResult) MsgType() string { return "AuthResult" }
 
+type AccountInfo struct {
+	Account   string `json:"account"`
+	Created   string `json:"created"`
+	Chars     int    `json:"chars"`
+	HasSecret bool   `json:"hasSecret"`
+}
+
+func (*AccountInfo) MsgType() string { return "AccountInfo" }
+
+type AccountResult struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+}
+
+func (*AccountResult) MsgType() string { return "AccountResult" }
+
 type ServerList struct {
 	Groups []ServerGroup `json:"groups"`
 }
@@ -914,6 +970,13 @@ type MapData struct {
 }
 
 func (*MapData) MsgType() string { return "MapData" }
+
+type NpcList struct {
+	Floor int      `json:"floor"`
+	Npcs  []NpcPos `json:"npcs"`
+}
+
+func (*NpcList) MsgType() string { return "NpcList" }
 
 type PosCorrect struct {
 	X   int `json:"x"`
@@ -1104,6 +1167,14 @@ func DecodeClient(data []byte) (Message, error) {
 		m = &Duel{}
 	case "Register":
 		m = &Register{}
+	case "ResetPassword":
+		m = &ResetPassword{}
+	case "AccountInfoReq":
+		m = &AccountInfoReq{}
+	case "ChangePassword":
+		m = &ChangePassword{}
+	case "ChangeSecret":
+		m = &ChangeSecret{}
 	case "Login":
 		m = &Login{}
 	case "SelectLine":
@@ -1118,6 +1189,8 @@ func DecodeClient(data []byte) (Message, error) {
 		m = &CharEnter{}
 	case "MapReq":
 		m = &MapReq{}
+	case "NpcListReq":
+		m = &NpcListReq{}
 	case "Move":
 		m = &Move{}
 	case "Turn":

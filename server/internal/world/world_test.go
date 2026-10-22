@@ -70,7 +70,7 @@ func setup(t *testing.T) (*World, store.Store, *data.Game) {
 }
 
 func newChar(t *testing.T, db store.Store, name string, floor, x, y int) store.Character {
-	a, err := db.CreateAccount(context.Background(), name, "pw")
+	a, err := db.CreateAccount(context.Background(), name, "pw", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,9 +230,9 @@ func TestSignBoard(t *testing.T) {
 	w.Do(func() {
 		for _, es := range w.floors {
 			for _, e := range es {
-				if e.npc != nil && e.npc.Function == "SignBoard" && e.npc.Text != "" {
+				// 庄园的告示牌显示的是主人家族（manor.go），文字不是 .create 里的；挑编号最小的普通告示牌，免得 map 遍历顺序不同时忽好忽坏
+				if e.npc != nil && e.npc.Function == "SignBoard" && e.npc.Text != "" && !strings.Contains(e.npc.Text, "庄园") && (target == nil || e.id < target.id) {
 					target = e
-					return
 				}
 			}
 		}
@@ -307,7 +307,7 @@ func TestWarp(t *testing.T) {
 func TestStatusOnEnter(t *testing.T) {
 	w, db, _ := setup(t)
 	h := data.Hometowns[0]
-	a, _ := db.CreateAccount(context.Background(), "stat", "pw")
+	a, _ := db.CreateAccount(context.Background(), "stat", "pw", "")
 	c, err := db.CreateCharacter(context.Background(), store.Character{AccountID: a.ID, Name: "stat", Sprite: 100000, Level: 1,
 		Floor: h.Floor, X: h.X, Y: h.Y, Vital: 8, Str: 6, Tgh: 4, Dex: 2, Earth: 5, Fire: 5, Charm: 60})
 	if err != nil {
@@ -348,7 +348,7 @@ func TestChatRange(t *testing.T) {
 func TestReturnHome(t *testing.T) {
 	w, db, _ := setup(t)
 	h := data.Hometowns[1]
-	a, _ := db.CreateAccount(context.Background(), "home", "pw")
+	a, _ := db.CreateAccount(context.Background(), "home", "pw", "")
 	c, err := db.CreateCharacter(context.Background(), store.Character{AccountID: a.ID, Name: "home", Sprite: 100000, Level: 1,
 		Hometown: 1, Floor: data.Hometowns[0].Floor, X: data.Hometowns[0].X, Y: data.Hometowns[0].Y})
 	if err != nil {
@@ -380,7 +380,7 @@ func TestBattleFlow(t *testing.T) {
 			}
 		}
 	}
-	acc, _ := db.CreateAccount(context.Background(), "fighter", "pw")
+	acc, _ := db.CreateAccount(context.Background(), "fighter", "pw", "")
 	c, _ := db.CreateCharacter(context.Background(), store.Character{AccountID: acc.ID, Name: "fighter", Sprite: 100000, Level: 1,
 		Floor: 100, X: x, Y: y, Vital: 5, Str: 15, Tgh: 0, Dex: 0, Earth: 10, Charm: 60})
 	cl := &fakeClient{}
@@ -426,7 +426,7 @@ func TestBattleFlow(t *testing.T) {
 func TestLevelUpAndStatUp(t *testing.T) {
 	w, db, _ := setup(t)
 	h := data.Hometowns[1]
-	acc, _ := db.CreateAccount(context.Background(), "grow", "pw")
+	acc, _ := db.CreateAccount(context.Background(), "grow", "pw", "")
 	c, _ := db.CreateCharacter(context.Background(), store.Character{AccountID: acc.ID, Name: "grow", Sprite: 100000, Level: 1,
 		Floor: h.Floor, X: h.X, Y: h.Y, Vital: 5, Str: 5, Tgh: 5, Dex: 5, Charm: 60})
 	cl := &fakeClient{}
@@ -469,7 +469,7 @@ func TestNurseHeals(t *testing.T) {
 			}
 		}
 	})
-	acc, _ := db.CreateAccount(context.Background(), "hurt", "pw")
+	acc, _ := db.CreateAccount(context.Background(), "hurt", "pw", "")
 	c, _ := db.CreateCharacter(context.Background(), store.Character{AccountID: acc.ID, Name: "hurt", Sprite: 100000, Level: 1,
 		Floor: nurse.Floor, X: nx + 1, Y: ny, Vital: 5, Str: 5, Tgh: 5, Dex: 5})
 	cl := &fakeClient{}
@@ -509,7 +509,7 @@ func TestNurseHeals(t *testing.T) {
 func TestItemsEquipAndUse(t *testing.T) {
 	w, db, _ := setup(t)
 	h := data.Hometowns[1]
-	acc, _ := db.CreateAccount(context.Background(), "itemer", "pw")
+	acc, _ := db.CreateAccount(context.Background(), "itemer", "pw", "")
 	c, _ := db.CreateCharacter(context.Background(), store.Character{AccountID: acc.ID, Name: "itemer", Sprite: 100000, Level: 1,
 		Floor: h.Floor, X: h.X, Y: h.Y, Vital: 5, Str: 5, Tgh: 5, Dex: 5, Charm: 60})
 	cl := &fakeClient{}
@@ -554,7 +554,7 @@ func TestItemsEquipAndUse(t *testing.T) {
 func TestBattleDrops(t *testing.T) {
 	w, db, _ := setup(t)
 	h := data.Hometowns[1]
-	acc, _ := db.CreateAccount(context.Background(), "looter", "pw")
+	acc, _ := db.CreateAccount(context.Background(), "looter", "pw", "")
 	c, _ := db.CreateCharacter(context.Background(), store.Character{AccountID: acc.ID, Name: "looter", Sprite: 100000, Level: 1,
 		Floor: h.Floor, X: h.X, Y: h.Y, Vital: 5, Str: 5, Tgh: 5, Dex: 5})
 	cl := &fakeClient{}
@@ -592,4 +592,28 @@ func TestNegativeDefQuick(t *testing.T) {
 			t.Errorf("防御 %d（应为负）、敏捷 %d（应为 -100）、攻击 %d（应为 0）", s.Def, s.Quick, s.Atk)
 		}
 	})
+}
+
+// 世界地图的 NPC 清单（NpcListReq）：一层楼全部有名字的 NPC 与位置，不限楼层；没名字的传送点不列；楼层不存在不回。
+func TestNpcList(t *testing.T) {
+	w, db, g := setup(t)
+	c, cl := petOwner(t, w, db, "看地图", 10, 60)
+	w.NpcList(int(c.ID), 1000) // 萨姆吉尔村
+	m, ok := find[*proto.NpcList](cl.take())
+	if !ok || m.Floor != 1000 || len(m.Npcs) == 0 {
+		t.Fatalf("应回 1000 层的 NPC 清单：%v %v", ok, m)
+	}
+	n := len(g.NPCs[1000])
+	if len(m.Npcs) > n {
+		t.Fatalf("清单 %d 个不应多于这层的 NPC %d 个", len(m.Npcs), n)
+	}
+	for _, p := range m.Npcs {
+		if p.Name == "" || !g.Floors[1000].In(p.X, p.Y) {
+			t.Fatalf("NPC 要有名字、在楼层内：%+v", p)
+		}
+	}
+	w.NpcList(int(c.ID), 999999)
+	if _, ok := find[*proto.NpcList](cl.take()); ok {
+		t.Fatal("不存在的楼层不应回清单")
+	}
 }

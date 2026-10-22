@@ -405,7 +405,7 @@ func (w *World) PetMail(charID, index, petSlot, itemSlot int, text string) {
 			say("特殊宠物不能传递邮件喔！", colorYellow)
 		case p.Guard:
 			say("家族守护兽无法传递邮件喔！", colorYellow)
-		case e.petMails > petMailMax:
+		case e.petMails >= petMailMax:
 			say("邮件中宠物过多，暂时无法传递宠物邮件！", colorYellow)
 		case w.now().Before(e.petMailAt):
 			say(fmt.Sprintf("需等待%d秒才能再次寄送宠物邮件！", int(e.petMailAt.Sub(w.now()).Seconds())+1), colorYellow)

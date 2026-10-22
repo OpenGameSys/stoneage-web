@@ -160,7 +160,11 @@ func (r *Ride) ManorIndex(petSprite int) int {
 	return -1
 }
 
-// ManorOK：家族的族长家楼层与守护精灵合不合第 i 种庄园骑宠的条件。
+// ManorLicence：第 i 种庄园骑宠对应的证书位元（H5 的规则：庄园骑宠不看家族，要用那个庄园的骑乘书学会）。
+// petlist 里蓝暴 08、红暴 09 两格原版填 -1（改走 Pointpetlist），左迪洛斯骑乘书 / 巴朵兰恩骑乘书（RIDE_PET8 / RIDE_PET9）就是这两个位元。
+func (r *Ride) ManorLicence(i int) int { return 8 + i }
+
+// ManorOK：家族的族长家楼层与守护精灵合不合第 i 种庄园骑宠的条件（原版的规则，现在只给测试与说明用）。
 func (r *Ride) ManorOK(i, fmFloor, fmSprite int) bool {
 	if i < 0 || i >= len(r.ManorPets) || r.ManorKind[i] != fmSprite {
 		return false

@@ -178,6 +178,18 @@ jobs:
       matrix:
         ref: ${{ fromJSON(needs.prepare.outputs.refs) }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          path: src
+      - name: Release 说明 = 标签所指提交的说明正文（去掉 Co-Authored-By 等 trailer）
+        working-directory: src
+        run: |
+          # 正文去掉 trailer 行（Co-Authored-By: … 等），再去掉末尾的空行
+          git log -1 --format=%b | grep -Ev '^[A-Za-z-]+: ' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > ../notes.md
+          if [ ! -s ../notes.md ]; then git log -1 --format=%s > ../notes.md; fi
+          printf '\n---\n解压平台包，再把 assets-*.zip 解到包里的 assets/ 目录，执行 bin/saserver 即可（设定见 config.yaml，用法见 docs/手册.md）。\n' >> ../notes.md
+          cat ../notes.md
       - uses: actions/download-artifact@v4
         with:
           pattern: saserver-${{ matrix.ref }}-*
@@ -198,6 +210,4 @@ jobs:
           files: |
             dist/*.zip
             dist/SHA256SUMS.txt
-          generate_release_notes: true   # 自动列出上一个标签之后的提交
-          body: |
-            解压平台包，再把 assets-*.zip 解到包里的 assets/ 目录，执行 bin/saserver 即可（设定见 config.yaml，用法见 docs/手册.md）。
+          body_path: notes.md   # 标签所指提交的说明正文（提交时写的那几条 "- …"）

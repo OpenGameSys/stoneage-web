@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,9 +41,9 @@ type battleRoom struct {
 	// （原版 BattleArray.WinFunc 只在打赢时由 BATTLE_Finish 调用，见 startBattleWith）。
 	npc   *entity
 	onEnd func(result string, members []*entity) // members 是打完时还在场的玩家（队长在前）
-	no    int  // 战斗编号（地图上的战斗记号）
-	help  bool // 我方开着求救（BSIDE_FLG_HELP_OK），别人可以加入
-	field int  // 战斗背景（加入的人用同一张）
+	no    int                                    // 战斗编号（地图上的战斗记号）
+	help  bool                                   // 我方开着求救（BSIDE_FLG_HELP_OK），别人可以加入
+	field int                                    // 战斗背景（加入的人用同一张）
 	// pvp 是玩家对玩家（BATTLE_TYPE_P_vs_P，duel.go）；charaLost：已经有玩家倒下（BATTLE_FLG_CHARALOST，之后逃跑就要扣 DP）
 	pvp, charaLost bool
 	watchers       []*entity // 观战的人（watch.go）：收 BattleStart / BattleTurn / BattleJoin / BattleEnd，不在场上
@@ -741,13 +742,13 @@ func (w *World) statusOf(e *entity) *proto.Status {
 // saveProgress 在后台保存等级与各项数值。
 func (w *World) saveProgress(e *entity) {
 	c := e.char
-	w.saves <- func() {
+	w.enqueue("prog:"+strconv.FormatInt(c.ID, 10), func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := w.db.SaveProgress(ctx, c); err != nil {
 			w.log.Error("保存数值失败", "char", c.ID, "err", err)
 		}
-	}
+	})
 }
 
 // abandonBattle：战斗中下线，自己的部分作废（保留当前 HP，倒下的按 1），在场上的人与宠物当作离开；

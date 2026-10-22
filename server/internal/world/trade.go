@@ -46,7 +46,26 @@ func (t *trade) side(e *entity) (*tradeSide, *tradeSide) {
 }
 
 // busy：在战斗或交易中，不能动道具与宠物（原版 CHAR_WORKTRADEMODE != FREE 时那些指令都不理）。
-func (e *entity) busy() bool { return e.fight != nil || e.watch != nil || e.trade != nil }
+func (e *entity) busy() bool {
+	return e.fight != nil || e.watch != nil || e.trade != nil || e.stall != nil || e.buying != nil
+}
+
+// tradeIntact 是 tradeSwap 前的核对：放上去的道具还在那一格、数量够，宠物还在（放上去之后不能动道具，但以防万一：
+// 对方锁定后自己把那件卖给 NPC、寄放起来，换到的就是空的）。
+func tradeIntact(s *tradeSide) bool {
+	for _, x := range s.items {
+		it := s.e.inv[x[0]]
+		if it == nil || it.count() < x[1] {
+			return false
+		}
+	}
+	for _, i := range s.pets {
+		if s.e.pets.Pets[i] == nil || s.e.pets.Ride == i {
+			return false
+		}
+	}
+	return s.e.char.Gold >= s.gold
+}
 
 // Trade 是 lssproto_TD_recv：cmd 为 request（D|D）、item / gold / pet（T|…|I / G / P）、lock（C）、ok（K）、cancel（W）。
 func (w *World) Trade(charID int, cmd string, slot, amount int) {
@@ -96,7 +115,7 @@ func (w *World) Trade(charID int, cmd string, slot, amount int) {
 
 // tradeRequest 是 TRADE_Search。
 func (w *World) tradeRequest(e *entity) {
-	if e.trade != nil || e.party != nil || e.fight != nil {
+	if e.busy() || e.party != nil {
 		return
 	}
 	fx, fy := e.x+MOVE[e.dir][0], e.y+MOVE[e.dir][1]
@@ -111,7 +130,7 @@ func (w *World) tradeRequest(e *entity) {
 			continue
 		}
 		found = true
-		if o.fight == nil && o.party == nil && o.fs&fsTrade != 0 && o.trade == nil {
+		if !o.busy() && o.party == nil && o.fs&fsTrade != 0 {
 			cands = append(cands, o)
 		}
 	}
@@ -253,6 +272,9 @@ func cloneInventory(inv *inventory) *inventory {
 // tradeSwap 是 TRADE_CheckTradeList + TRADE_HandleTrade：检查空间后一次换完。
 func (w *World) tradeSwap(t *trade) bool {
 	a, b := t.sides[0], t.sides[1]
+	if !tradeIntact(a) || !tradeIntact(b) {
+		return false
+	}
 	invA, invB := cloneInventory(a.e.inv), cloneInventory(b.e.inv)
 	fromA, fromB := tradeTake(invA, a.items), tradeTake(invB, b.items)
 	fits := func(inv *inventory, items []*Item) bool {
@@ -312,6 +334,9 @@ func (w *World) tradeTakePets(s *tradeSide) []*Pet {
 			bag.Standby &^= 1 << i
 			if bag.Battle == i {
 				bag.Battle = -1
+			}
+			if bag.Ride == i {
+				bag.Ride = -1 // 不然换来的宠物落在同一格就变成"骑着"它
 			}
 		}
 	}

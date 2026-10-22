@@ -15,11 +15,11 @@ func TestStore(t *testing.T) {
 	}
 	defer s.Close()
 
-	a, err := s.CreateAccount(ctx, "Alice", "secret")
+	a, err := s.CreateAccount(ctx, "Alice", "secret", "code")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateAccount(ctx, "alice", "x"); !errors.Is(err, ErrExists) {
+	if _, err := s.CreateAccount(ctx, "alice", "x", "code"); !errors.Is(err, ErrExists) {
 		t.Fatalf("账号名应不区分大小写唯一，得到 %v", err)
 	}
 	if _, err := s.Authenticate(ctx, "alice", "wrong"); !errors.Is(err, ErrBadLogin) {

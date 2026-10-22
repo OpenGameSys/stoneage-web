@@ -896,7 +896,16 @@ export class BattleScreen {
     for (const a of list) {
       const fr = a.frame(assets, now);
       a.rect = null;
-      if (!fr) continue;
+      if (!fr) {
+        // 这套资源没有它的动画（如奇宝 104152、霍尔克 104153 是后来补丁包的图，原客户端 spradrn 最大只到 103277）：
+        // 画一个虚框占位，点选目标时照样能点到（以前没有范围就选不到它）
+        if (!a.dead) {
+          a.rect = [a.x - 30, a.y - 84, 60, 88];
+          ui.box(a.x - 30, a.y - 84, a.x + 30, a.y + 4, "rgba(255,255,255,0.35)", false);
+          ui.texts.push({ x: Math.round(a.x), y: Math.round(a.y - 48), text: "？", color: FONT.GRAY, align: "center" });
+        }
+        continue;
+      }
       const e = assets.image(fr[0]);
       ui.image(fr[0], a.x + fr[1], a.y + fr[2], undefined, true);
       if (e) a.rect = [a.x + fr[1] + e.ox, a.y + fr[2] + e.oy, e.w, e.h];

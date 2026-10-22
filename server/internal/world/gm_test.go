@@ -1,6 +1,7 @@
 package world
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -288,4 +289,34 @@ func TestGMDetailAndMore(t *testing.T) {
 			t.Errorf("宠物档次 / 名字没改：%d %q", p.Rank, p.FreeName)
 		}
 	})
+}
+
+// GM 替在线玩家改密码 / 安全码（/setpw、/setsecret）：存进账号的是 MD5，之后用那个密码能通过验证。
+func TestGMSetPasswordAndSecret(t *testing.T) {
+	w, db, _ := setup(t)
+	w.GMs = map[string]bool{"boss": true}
+	ctx := context.Background()
+	gmc := newChar(t, db, "Boss", 1000, 47, 82)
+	w.Enter(gmc, &gmClient{account: "boss"})
+	if _, err := db.CreateAccount(ctx, "victim_acc", "00000000000000000000000000000000", ""); err != nil {
+		t.Fatal(err)
+	}
+	pc := newChar(t, db, "受害者", 1000, 48, 82)
+	pcl := &gmClient{account: "victim_acc"}
+	w.Enter(pc, pcl)
+	w.Do(func() {})
+	pcl.take()
+	w.GmCommand(int(gmc.ID), "/setpw 受害者 short")
+	w.GmCommand(int(gmc.ID), "/setpw 受害者 hello world!")
+	w.GmCommand(int(gmc.ID), "/setsecret 受害者 1234")
+	w.Do(func() {})
+	if !strings.Contains(fmtMsgs(pcl.take()), "GM 替你改了") {
+		t.Error("玩家应收到通知")
+	}
+	if _, err := db.Authenticate(ctx, "victim_acc", "fc3ff98e8c6a0d3087d515c0473f8677"); err != nil { // md5("hello world!")
+		t.Fatalf("新密码应能验证：%v", err)
+	}
+	if err := db.ResetPassword(ctx, "victim_acc", "81dc9bdb52d04dc20036dbd8313ed055", "00000000000000000000000000000000"); err != nil { // md5("1234")
+		t.Fatalf("新安全码应能找回密码：%v", err)
+	}
 }

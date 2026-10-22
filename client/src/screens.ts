@@ -5,6 +5,7 @@
 //   创建角色：选形象与颜色（selCharGraNo / selCharGraColorWin）→ 设定（editCharParam）→ 出生地（selHomeTown）
 // 原版 640×480 坐标的画面统一加 OFFSET_640 放到 800×600 中央。
 
+import { md5 } from "./md5.ts";
 import { Actor } from "./field.ts";
 import type { Connection } from "./net.ts";
 import type { CharSummary, ServerGroup } from "./proto.gen.ts";
@@ -56,6 +57,9 @@ export class LoginScreen implements Screen {
   private id!: InputBox;
   private pass!: InputBox;
   private busy = false;
+  // H5 新增的两个对话框（原版账号由官网注册、找回密码也在官网）：注册（账号 / 密码 / 确认密码 / 安全码）、找回密码（账号 / 安全码 / 新密码 / 确认）
+  private dialog: "register" | "reset" | null = null;
+  private fields: InputBox[] = [];
   constructor(app: App) { this.app = app; }
 
   enter() {
@@ -69,11 +73,12 @@ export class LoginScreen implements Screen {
     setTimeout(() => (this.id.value ? this.pass : this.id).focus(), 0);
   }
 
-  leave() { this.id.remove(); this.pass.remove(); }
+  leave() { this.id.remove(); this.pass.remove(); this.closeDialog(); }
 
   frame() {
     const ui = this.app.ui;
     ui.image(CG.ID_PASS, 400, 300);
+    if (this.dialog) { this.dialogFrame(); return; }
     // 输入框所在的木框，点击时把焦点给对应输入框
     if (ui.hitBox(452, 150, 552, 172, "id", false) && ui.clicked("id")) this.id.focus();
     if (ui.hitBox(452, 190, 552, 212, "pass", false) && ui.clicked("pass")) this.pass.focus();
@@ -83,19 +88,126 @@ export class LoginScreen implements Screen {
     if (quit) { ui.image(CG.ID_PASS_QUIT, 401, 306); ui.bottomLine = "结束游戏。"; }
     if (ui.clicked("ok")) this.submit("Login");
     if (ui.clicked("quit")) { this.id.value = ""; this.pass.value = ""; this.id.focus(); }
-    // H5 新增：原版账号由官网注册，这里提供注册入口
-    if (ui.textButton(458, 226, "注册新账号", FONT.YELLOW, "register")) this.submit("Register");
-    if (ui.hovered("register")) ui.bottomLine = "用上面填写的账号和密码注册。";
+    // H5 新增：原版账号由官网注册，这里提供注册与找回密码的入口
+    // 两个连结在账号 / 密码木框（x 452..552，中心 502）正下方居中，各占一行
+    const cx = 502;
+    if (ui.textButton(cx - measure("注册新账号") / 2, 224, "注册新账号", FONT.YELLOW, "register")) this.openDialog("register");
+    if (ui.hovered("register")) ui.bottomLine = "填写账号、密码与安全码注册新账号。";
+    if (ui.textButton(cx - measure("找回密码") / 2, 246, "找回密码", FONT.AQUA, "reset")) this.openDialog("reset");
+    if (ui.hovered("reset")) ui.bottomLine = "用注册时填的安全码重设密码。";
   }
 
-  private async submit(kind: "Login" | "Register") {
-    if (this.busy) return;
-    const account = this.id.value.trim(), password = this.pass.value;
-    if (!account || !password) { this.app.message("请输入账号和密码！"); return; }
+  // ---------------- 注册 / 找回密码对话框 ----------------
+  private static readonly DLG_X = 208; private static readonly DLG_Y = 150; // 6×5 格的窗口（384×240）
+  private static readonly ROWS: Record<"register" | "reset", { label: string; password: boolean; max: number }[]> = {
+    register: [{ label: "账　　号", password: false, max: 16 }, { label: "密　　码", password: true, max: 64 },
+      { label: "确认密码", password: true, max: 64 }, { label: "安 全 码", password: true, max: 32 }],
+    reset: [{ label: "账　　号", password: false, max: 16 }, { label: "安 全 码", password: true, max: 32 },
+      { label: "新 密 码", password: true, max: 64 }, { label: "确认密码", password: true, max: 64 }],
+  };
+
+  private openDialog(kind: "register" | "reset") {
+    this.closeDialog();
+    this.dialog = kind;
+    this.id.el.style.display = "none"; this.pass.el.style.display = "none"; // 登录页的输入框先藏起来
+    const x = LoginScreen.DLG_X, y = LoginScreen.DLG_Y;
+    this.fields = LoginScreen.ROWS[kind].map((r, i) => new InputBox(this.app.canvas, x + 120, y + 66 + i * 32, 200, 16, { password: r.password, maxLength: r.max }));
+    this.fields[0].value = this.id.value.trim();
+    this.fields.forEach((box, i) => box.el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); if (i + 1 < this.fields.length) this.fields[i + 1].focus(); else this.submitDialog(); }
+      if (e.key === "Tab") { e.preventDefault(); this.fields[(i + 1) % this.fields.length].focus(); }
+      if (e.key === "Escape") { e.preventDefault(); this.closeDialog(); }
+    }));
+    setTimeout(() => (this.fields[0].value ? this.fields[1] : this.fields[0]).focus(), 0);
+  }
+
+  /** 对话框里弹提示：提示窗画在画布上、输入框是 DOM，会盖在提示上面，所以先藏起来，按掉提示再显示 */
+  private msgOpen = false; // 提示窗开着：对话框整个不画（只留暗幕），免得把提示窗盖住
+  private say(text: string) {
+    for (const f of this.fields) f.el.style.display = "none";
+    this.msgOpen = true;
+    this.app.message(text, () => { this.msgOpen = false; for (const f of this.fields) f.el.style.display = ""; });
+  }
+
+  private closeDialog() {
+    for (const f of this.fields) f.remove();
+    this.fields = []; this.dialog = null;
+    if (this.id) { this.id.el.style.display = ""; this.pass.el.style.display = ""; }
+  }
+
+  private dialogFrame() {
+    const ui = this.app.ui, kind = this.dialog!, x = LoginScreen.DLG_X, y = LoginScreen.DLG_Y;
+    ui.hitBox(0, 0, 800, 600, "dlg-block", false); // 挡住后面登录页的点击
+    ui.box(0, 0, 800, 600, "rgba(0,0,0,0.45)", true);
+    if (this.msgOpen) return; // 提示窗（main.ts 的 modal）画在最上面，这时对话框不画
+    ui.window(x, y, 6, 5, "login-dlg");
+    ui.box(x + 22, y + 10, x + 362, y + 230, "rgba(0,0,0,0.55)", true);
+    const title = kind === "register" ? "注册新账号" : "找回密码";
+    ui.text(x + (384 - measure(title)) / 2, y + 22, title, FONT.YELLOW);
+    LoginScreen.ROWS[kind].forEach((r, i) => {
+      const ry = y + 66 + i * 32;
+      ui.text(x + 40, ry, r.label, FONT.WHITE);
+      ui.box(x + 116, ry - 2, x + 324, ry + 18, "rgba(255,255,255,0.35)", false);
+      if (ui.hitBox(x + 116, ry - 2, x + 324, ry + 18, `dlg-f${i}`, false) && ui.clicked(`dlg-f${i}`)) this.fields[i].focus();
+    });
+    const hint = kind === "register" ? "密码 8–64 位；安全码 4–32 位，找回密码时要用，请记好。" : "安全码连错几次会暂时锁住。";
+    ui.text(x + 24, y + 196, hint, FONT.GRAY);
+    const okLabel = kind === "register" ? "注　册" : "重　设";
+    if (ui.textButton(x + 110, y + 214, okLabel, FONT.YELLOW, "dlg-ok")) this.submitDialog();
+    if (ui.textButton(x + 230, y + 214, "取　消", FONT.AQUA, "dlg-cancel")) this.closeDialog();
+  }
+
+  private async submitDialog() {
+    if (this.busy || !this.dialog) return;
+    const kind = this.dialog, v = this.fields.map((f) => f.value);
+    const account = v[0].trim();
+    const check = (password: string, confirm: string, secret: string): string | null => {
+      if (!account) return "请输入账号！";
+      if (!/^[A-Za-z0-9_]{3,16}$/.test(account)) return "账号为 3–16 位字母、数字或下划线。";
+      if (password.length < 8 || password.length > 64) return "密码要 8–64 位。";
+      if (password !== confirm) return "两次输入的密码不一样。";
+      if (secret.length < 4 || secret.length > 32) return "安全码要 4–32 位。";
+      return null;
+    };
+    const err = kind === "register" ? check(v[1], v[2], v[3]) : check(v[2], v[3], v[1]);
+    if (err) { this.say(err); return; }
     this.busy = true;
     try {
       const net = await this.app.connect();
-      net.send({ t: kind, account, password });
+      if (kind === "register") {
+        net.send({ t: "Register", account, password: md5(v[1]), secret: md5(v[3]) }); // 密码与安全码都只送 MD5
+        const r = await net.once("AuthResult");
+        if (!r.ok) { this.say(r.message); return; }
+        this.closeDialog();
+        this.id.value = account; this.pass.value = "";
+        try { localStorage.setItem("sa-account", account); } catch {}
+        const list = await net.once("ServerList");
+        this.app.groups = list.groups;
+        this.app.go(new LineScreen(this.app));
+      } else {
+        net.send({ t: "ResetPassword", account, secret: md5(v[1]), password: md5(v[2]) });
+        const r = await net.once("AuthResult");
+        if (r.message.includes("已重设")) {
+          this.closeDialog(); this.id.value = account; this.pass.value = "";
+          this.app.message(r.message, () => this.pass.focus());
+        } else this.say(r.message);
+      }
+    } catch (e) {
+      this.say((e as Error).message);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private async submit(kind: "Login") {
+    if (this.busy) return;
+    const account = this.id.value.trim(), password = this.pass.value;
+    if (!account || !password) { this.app.message("请输入账号和密码！"); return; }
+    if (password.length < 8 || password.length > 64) { this.app.message("密码要 8–64 位。"); return; }
+    this.busy = true;
+    try {
+      const net = await this.app.connect();
+      net.send({ t: kind, account, password: md5(password) }); // 只送 MD5，服务端只存、只比对这个值
       const r = await net.once("AuthResult");
       if (!r.ok) { this.app.message(r.message); return; }
       try { localStorage.setItem("sa-account", account); } catch {}

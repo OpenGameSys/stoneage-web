@@ -182,10 +182,21 @@ func TestBusRide(t *testing.T) {
 		if max(abs(e.x-n.x), abs(e.y-n.y)) > 2 {
 			t.Errorf("乘客应跟着巴士：巴士 (%d,%d) 乘客 (%d,%d)", n.x, n.y, e.x, e.y)
 		}
-		// 直接到终点
+		// 路径要是逐格相邻的（开机 BFS 算好），直接到终点
 		r := n.bus.routes[n.bus.cur]
-		last := r.points[len(r.points)-1]
-		n.x, n.y, n.bus.point = last[1], last[2], len(r.points)-1
+		for i := 1; i < len(r.path); i++ {
+			if r.path[i][0] != r.path[i-1][0] || abs(r.path[i][1]-r.path[i-1][1]) > 1 || abs(r.path[i][2]-r.path[i-1][2]) > 1 {
+				t.Errorf("巴士路径第 %d 格不相邻：%v → %v", i, r.path[i-1], r.path[i])
+			}
+		}
+		last := r.path[len(r.path)-1]
+		if n.bus.reverse {
+			last = r.path[0]
+		}
+		n.x, n.y, n.bus.step = last[1], last[2], len(r.path)-1
+		if n.bus.reverse {
+			n.bus.step = 0
+		}
 		w.busWalk(n)
 		if n.bus.mode != 3 {
 			t.Fatalf("到站应是 mode 3：%d", n.bus.mode)
@@ -207,7 +218,7 @@ func TestBusRide(t *testing.T) {
 	}
 }
 
-// 庄园骑宠（Pointpetlist）：占有庄园、守护精灵颜色对的家族成员才能骑蓝暴 / 红暴，形象按人物编号查 PointRideNoList。
+// 庄园骑宠（Pointpetlist）：不看家族，用那个庄园的骑乘书（证书位元 8 / 9）学会就能骑蓝暴 / 红暴，形象按人物编号查 PointRideNoList。
 func TestManorRide(t *testing.T) {
 	w, db, g := setup(t)
 	if g.Ride.ManorIndex(100372) != 0 || g.Ride.ManorIndex(100373) != 1 || g.Ride.ManorIndex(100329) != -1 {
@@ -224,16 +235,24 @@ func TestManorRide(t *testing.T) {
 	w.Do(func() {
 		e := w.players[id]
 		p := &Pet{Sprite: 100372, Level: 1}
-		if !strings.HasPrefix(w.rideInfo(e, p), "need:") || !strings.Contains(w.rideInfo(e, p), "庄园") {
-			t.Errorf("没有家族应说要庄园家族：%s", w.rideInfo(e, p))
+		if !strings.HasPrefix(w.rideInfo(e, p), "need:") || !strings.Contains(w.rideInfo(e, p), "骑乘书") {
+			t.Errorf("没用骑乘书应说要骑乘书：%s", w.rideInfo(e, p))
 		}
-		e.fm = famView{Index: 7, Duty: fmDutyMember, Floor: 1041, Sprite: 1}
-		if s := w.rideInfo(e, p); !strings.Contains(s, "守护精灵") {
-			t.Errorf("颜色不对应提示：%s", s)
+		e.fm = famView{Index: 7, Duty: fmDutyMember, Floor: 1041, Sprite: 0}
+		if s := w.mountSprite(e, 100372); s != 0 {
+			t.Errorf("占有庄园的家族也不算，要骑乘书：%d", s)
 		}
-		e.fm.Sprite = 0
-		if s := w.mountSprite(e, 100372); s != 101008 {
-			t.Errorf("条件都对应能骑：%d", s)
+		e.fm = famView{}
+		e.pets.Licence[0] |= 1 << 9 // 巴朵兰恩骑乘书：只学了红暴
+		if s := w.mountSprite(e, 100372); s != 0 {
+			t.Errorf("学了红暴不能骑蓝暴：%d", s)
+		}
+		if s := w.mountSprite(e, 100373); s != 101009 {
+			t.Errorf("学了红暴应能骑红暴：%d", s)
+		}
+		e.pets.Licence[0] |= 1 << 8 // 左迪洛斯骑乘书
+		if s := w.mountSprite(e, 100372); s != 101008 || w.rideInfo(e, p) != "ok" {
+			t.Errorf("用了左迪洛斯骑乘书、没有家族也能骑蓝暴：%d %s", s, w.rideInfo(e, p))
 		}
 	})
 }

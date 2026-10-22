@@ -23,7 +23,9 @@ const W = 9, H = 9; // 576×432
 const ROW = 22;
 const PICK_ROWS = 10;
 const PICK_TITLE: Record<string, string> = { item: "选择道具", enemy: "选择敌人（给宠物）", player: "选择玩家", skill: "选择宠物技能" };
+const PLAYERS_TAB = "玩家";
 const HIST_TAB = "记录";
+const PLAYER_ROWS = 14;
 const HIST_KEY = "sa.gm.history";
 const HIST_MAX = 300;
 const HIST_ROWS = 14;
@@ -49,6 +51,9 @@ export class GmWindow {
   // 执行记录（"记录"分页）：时间、种类（cmd 送出的指令 / reply 服务端的回应 / note 客户端的提示）、文字；存 localStorage
   private history: { at: string; kind: "cmd" | "reply" | "note"; text: string }[] = [];
   private histPage = -1;           // -1 是最后一页
+  // "玩家"分页：在线玩家清单（GmList "player"），选一个看详情、对他下指令；三个输入框（禁言分钟、道具编号与个数、密码 / 安全码）放在 boxes 里
+  private pSel = -1;
+  private pPage = 0;
   private host: GmHost;
 
   constructor(host: GmHost) {
@@ -105,7 +110,7 @@ export class GmWindow {
 
   private origin(): [number, number] { return [(800 - W * 64) / 2, (600 - H * 48) / 2]; }
 
-  private groups(): string[] { return [...new Set(this.items.map((i) => i.group)), HIST_TAB]; }
+  private groups(): string[] { return [...new Set(this.items.map((i) => i.group)), PLAYERS_TAB, HIST_TAB]; }
 
   private input(x: number, y: number, w: number, onEnter: () => void): InputBox {
     const b = new InputBox(this.host.canvas, x, y, w, 16, { maxLength: 100 });
@@ -288,8 +293,8 @@ export class GmWindow {
     if (!this.open) return;
     if (esc) { if (this.picker) this.closePicker(); else { this.close(); return; } }
     const ui = this.host.ui, [x, y] = this.origin();
-    const it = this.items[this.sel], hist = this.group === HIST_TAB;
-    if (!hist && this.boxes.length === 0 && (it?.args?.length ?? 0) > 0) this.pick(this.sel);
+    const it = this.items[this.sel], hist = this.group === HIST_TAB, players = this.group === PLAYERS_TAB;
+    if (!hist && !players && this.boxes.length === 0 && (it?.args?.length ?? 0) > 0) this.pick(this.sel);
     this.hideOthers();
     ui.window(x, y, W, H, "gm-wnd");
     rects.push([x, y, x + W * 64, y + H * 48]);
@@ -300,6 +305,7 @@ export class GmWindow {
       const on = g === this.group;
       if (ui.text(tx, y + 44, g, on ? FONT.YELLOW : FONT.AQUA, `gm-g-${g}`) && !on) {
         if (g === HIST_TAB) { this.closePicker(); this.removeBoxes(); this.group = g; this.histPage = -1; }
+        else if (g === PLAYERS_TAB) this.openPlayers();
         else this.pick(this.items.findIndex((m) => m.group === g));
         return;
       }
@@ -308,6 +314,7 @@ export class GmWindow {
     }
     ui.box(x + 24, y + 66, x + W * 64 - 24, y + 67, "rgba(255,255,255,0.25)", true);
     if (hist) { this.historyFrame(x, y); return; }
+    if (players) { this.playersFrame(x, y); return; }
     // 这一页的指令（清单开着时被清单窗口盖住，不画）
     let ly = y + 80;
     if (!this.picker) this.items.forEach((m, i) => {
@@ -328,6 +335,84 @@ export class GmWindow {
     }
     if (ui.text(x + W * 32 - 28, y + H * 48 - 36, "关　闭", FONT.AQUA, "gm-close")) this.close();
     if (this.picker) this.pickerFrame(x, y);
+  }
+
+  // ---------------- "玩家"分页 ----------------
+
+  /** 切到"玩家"分页：向服务端要在线玩家清单，建三个输入框 */
+  private openPlayers() {
+    this.closePicker();
+    this.removeBoxes();
+    this.group = PLAYERS_TAB;
+    this.pPage = 0;
+    this.lists.delete("player");
+    this.host.list("player");
+    const [x, y] = this.origin(), rx = x + 318;
+    const run = () => {};
+    const mins = this.input(rx + 54, y + 300, 50, run); mins.value = "10";
+    const item = this.input(rx + 70, y + 330, 120, run); item.value = "";
+    const pw = this.input(rx + 70, y + 360, 160, run); pw.value = "";
+    this.boxes = [mins, item, pw];
+  }
+
+  private playerCmd(text: string) { this.addLog(text, "cmd"); this.host.send(text); }
+
+  /** 左边是在线玩家（名字、等级、位置），右边是选中那个人的详情与管理按钮 */
+  private playersFrame(x: number, y: number) {
+    const ui = this.host.ui, all = this.lists.get("player"), rx = x + 318;
+    ui.text(x + 28, y + 80, "在线玩家", FONT.AQUA);
+    if (ui.text(x + 120, y + 80, "刷新", FONT.YELLOW, "gm-p-refresh")) { this.lists.delete("player"); this.host.list("player"); }
+    if (!all) ui.text(x + 28, y + 104, "读取中…", FONT.GRAY);
+    else {
+      const pages = Math.max(1, Math.ceil(all.length / PLAYER_ROWS));
+      this.pPage = Math.min(this.pPage, pages - 1);
+      all.slice(this.pPage * PLAYER_ROWS, (this.pPage + 1) * PLAYER_ROWS).forEach((e, i) => {
+        const ry = y + 104 + i * 20, on = e.id === this.pSel, id = `gm-p${i}`;
+        if (ui.hitBox(x + 24, ry - 2, x + 296, ry + 17, id, false)) ui.box(x + 24, ry - 2, x + 296, ry + 17, "rgba(255,255,255,0.08)", true);
+        if (on) ui.box(x + 24, ry - 2, x + 296, ry + 17, "rgba(255,216,74,0.2)", true);
+        ui.text(x + 28, ry, e.name, on ? FONT.YELLOW : FONT.WHITE);
+        ui.text(x + 130, ry, e.info, FONT.GRAY);
+        if (ui.clicked(id)) { this.pSel = e.id; this.hover = { kind: "player", id: e.id }; if (!this.details.has(`player:${e.id}`)) { this.details.set(`player:${e.id}`, null); this.host.detail("player", e.id); } }
+      });
+      const by = y + 104 + PLAYER_ROWS * 20 + 4;
+      ui.text(x + 28, by, `${all.length} 人　第 ${this.pPage + 1} / ${pages} 页`, FONT.AQUA);
+      if (this.pPage > 0 && ui.text(x + 180, by, "◀", FONT.YELLOW, "gm-p-prev")) this.pPage--;
+      if (this.pPage < pages - 1 && ui.text(x + 210, by, "▶", FONT.YELLOW, "gm-p-next")) this.pPage++;
+    }
+    ui.box(x + 304, y + 76, x + 305, y + H * 48 - 24, "rgba(255,255,255,0.25)", true);
+    const sel = all?.find((e) => e.id === this.pSel);
+    if (!sel) { ui.text(rx, y + 80, "点左边的玩家。", FONT.GRAY); for (const b of this.boxes) if (b) b.el.style.display = "none"; }
+    else {
+      for (const b of this.boxes) if (b) b.el.style.display = "";
+      const d = this.details.get(`player:${sel.id}`);
+      ui.text(rx, y + 80, sel.name, FONT.YELLOW);
+      if (ui.text(rx + 200, y + 80, "重读", FONT.GREEN, "gm-p-reload")) { this.details.delete(`player:${sel.id}`); this.details.set(`player:${sel.id}`, null); this.host.detail("player", sel.id); }
+      const lines: string[] = [];
+      (d?.lines ?? ["读取中…"]).forEach((l) => wrapBytes(l, 32).forEach((w) => lines.push(w)));
+      lines.slice(0, 7).forEach((l, i) => ui.text(rx, y + 102 + i * 17, l, FONT.WHITE));
+      const n = sel.name;
+      const btn = (bx: number, by: number, label: string, id: string, color = FONT.GREEN) => ui.text(bx, by, label, color, `gm-pb-${id}`);
+      let by = y + 232;
+      if (btn(rx, by, "查看", "look")) this.playerCmd(`/look ${n}`);
+      if (btn(rx + 50, by, "去找", "goto")) this.playerCmd(`/goto ${n}`);
+      if (btn(rx + 100, by, "叫来", "call")) this.playerCmd(`/call ${n}`);
+      if (btn(rx + 150, by, "踢下线", "kick", FONT.RED)) this.playerCmd(`/kick ${n}`);
+      by += 30; // y + 262
+      ui.text(rx, by + 38, "禁言", FONT.WHITE); // 输入框在 y + 300
+      ui.box(rx + 50, by + 35, rx + 108, by + 55, "rgba(255,255,255,0.35)", false);
+      ui.text(rx + 112, by + 38, "分钟", FONT.WHITE);
+      if (btn(rx + 150, by + 38, "执行", "mute")) this.playerCmd(`/mute ${n} ${this.boxes[0]?.value.trim() || "10"}`);
+      if (btn(rx + 196, by + 38, "解除", "unmute")) this.playerCmd(`/mute ${n} 0`);
+      ui.text(rx, by + 68, "给道具", FONT.WHITE); // y + 330
+      ui.box(rx + 66, by + 65, rx + 194, by + 85, "rgba(255,255,255,0.35)", false);
+      if (btn(rx + 200, by + 68, "执行", "give")) { const v = (this.boxes[1]?.value ?? "").trim(); if (v) this.playerCmd(`/give ${n} ${v}`); else this.addLog("给道具：先填\"编号 个数\"", "note"); }
+      ui.text(rx, by + 98, "新密码", FONT.WHITE); // y + 360
+      ui.box(rx + 66, by + 95, rx + 234, by + 115, "rgba(255,255,255,0.35)", false);
+      if (btn(rx, by + 124, "改密码", "setpw")) { const v = this.boxes[2]?.value ?? ""; if (v.length >= 8) this.playerCmd(`/setpw ${n} ${v}`); else this.addLog("密码要 8 位以上", "note"); }
+      if (btn(rx + 70, by + 124, "改安全码", "setsecret")) { const v = this.boxes[2]?.value ?? ""; if (v.length >= 4) this.playerCmd(`/setsecret ${n} ${v}`); else this.addLog("安全码要 4 位以上", "note"); }
+      ui.text(rx, by + 148, "道具填\"编号 个数\"；密码框兼作安全码。", FONT.GRAY);
+    }
+    if (ui.text(x + W * 32 - 28, y + H * 48 - 36, "关　闭", FONT.AQUA, "gm-close")) this.close();
   }
 
   /** "记录"分页：执行过的指令与回应，新的在下面，一页 HIST_ROWS 行；可以翻页、清除 */

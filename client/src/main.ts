@@ -65,10 +65,13 @@ function timeZone(hour: number): number {
   return 0;                                   // 白天
 }
 const PAL_CHANGE_MS = 3600 * (1000 / 60);
-const pal = { from: 0, to: 0, at: -1e9 };
+const pal = { from: 0, to: 0, at: -1e9, fixed: false };
 function updatePalette(now: number, floorPalette: number) {
   const target = floorPalette >= 0 ? floorPalette : timeZone(saHour(now));
-  if (target !== pal.to) { pal.from = pal.to; pal.to = target; pal.at = floorPalette >= 0 ? -1e9 : now; }
+  // 进出固定调色板的楼层（房间）都直接切换：出房间时外面本来就是晚上，不能先亮一下再慢慢变暗；只有户外的昼夜交替才渐变
+  const fixed = floorPalette >= 0;
+  if (target !== pal.to) { pal.from = pal.to; pal.to = target; pal.at = fixed || pal.fixed ? -1e9 : now; }
+  pal.fixed = fixed;
   const t = Math.min(1, (now - pal.at) / PAL_CHANGE_MS);
   renderer.paletteA = pal.from; renderer.paletteB = pal.to; renderer.paletteMix = t;
 }
@@ -252,6 +255,7 @@ const app: App = {
       battle = null;
       app.go(new LoginScreen(app));
       app.message(`与服务器的连接中断：${reason}`);
+      reloadIfStale();
     };
     c.on("Error", (m) => { if (m.code !== "rate") app.message(m.message); });
     c.on("CharListResult", (m) => { app.chars = m.chars; app.maxChars = m.maxChars; });
@@ -263,6 +267,8 @@ const app: App = {
     // 没有发言者的是系统文字（原版 CHAR_talkToCli(..., -1, ...)，如"交出某某。"），只显示内容
     // GM 指令选单：只有 GM 上线时服务端才发（config.yaml 的 gms）
     c.on("GmMenu", (m) => { gmItems = m.items; if (screen instanceof FieldScreen) screen.setGmMenu(m.items); });
+    c.on("AccountInfo", (m) => { if (screen instanceof FieldScreen) screen.menus.setAccountInfo(m); });
+    c.on("AccountResult", (m) => { chat(m.message, m.ok ? FONT.GREEN : FONT.RED); if (screen instanceof FieldScreen) screen.menus.accountResult(m.ok); });
     c.on("QuestLog", (m) => { questLog = m.quests ?? []; if (screen instanceof FieldScreen) screen.setQuests(questLog); });
     c.on("GmList", (m) => { if (screen instanceof FieldScreen) screen.gmList(m.kind, m.entries); });
     c.on("GmDetail", (m) => { if (screen instanceof FieldScreen) screen.gmDetail(m); });
@@ -448,6 +454,17 @@ function chat(text: string, color: string = FONT.WHITE) {
   while (chatLog.length > 50) chatLog.shift();
 }
 
+/** 断线后（多半是服务端重启换了新版）查 index.html 里 main.js 的版本号，和现在跑的不一样就整页重新载入：
+ *  不然回到登录页再登录跑的还是旧代码。版本号由 client/build.mjs 写进 index.html 与各模块的 ?v=。 */
+function reloadIfStale() {
+  const cur = /[?&]v=([A-Za-z0-9]+)/.exec(import.meta.url)?.[1];
+  if (!cur) return;
+  fetch("index.html", { cache: "no-store" }).then((r) => r.text()).then((html) => {
+    const v = /main\.js\?v=([A-Za-z0-9]+)/.exec(html)?.[1];
+    if (v && v !== cur) location.reload();
+  }).catch(() => { /* 服务端还没起来：下次断线再查 */ });
+}
+
 const keys = new Set<string>();
 const keyPressed = new Set<string>(); // 本帧刚按下的键
 addEventListener("keydown", (e) => {
@@ -482,6 +499,9 @@ class FieldScreen implements Screen {
     trade: (cmd, slot, amount) => app.net?.send({ t: "Trade", cmd, slot, amount }),
     vendor: (cmd, title, kinds, slots, prices) => app.net?.send({ t: "Vendor", cmd, title, kinds, slots, prices }),
     partyKick: (slot) => app.net?.send({ t: "PartyKick", slot }),
+    accountReq: () => app.net?.send({ t: "AccountInfoReq" }),
+    changePassword: (old, password) => app.net?.send({ t: "ChangePassword", old, password }),
+    changeSecret: (password, secret) => app.net?.send({ t: "ChangeSecret", password, secret }),
     action: (no) => { const s = field?.self; if (s) { app.net?.send({ t: "Action", x: s.x, y: s.y, action: no }); s.setAct(no); } },
     emote: (spr) => { if (field?.self) field.self.emote = spr; },
     planet: () => app.lineName,
@@ -608,7 +628,7 @@ class FieldScreen implements Screen {
     if (now - this.seenSavedAt > 5000) { this.seenSavedAt = now; f.saveSeen(); } // 看过的格子每 5 秒存一次
     // Esc 开关系统窗口、Ctrl+S 开关状态窗口（原版 MenuToggleFlag ^= JOY_ESC / JOY_CTRL_S）
     if (!modal && !this.input) {
-      if (keyPressed.has("Escape")) { if (this.menus.ai.open) this.menus.ai.close(); else if (!this.menus.gm.open) this.menus.toggleSystem(); }
+      if (keyPressed.has("Escape")) { if (this.menus.ai.open) this.menus.ai.close(); else if (this.menus.mapOpen) this.menus.toggleMap(); else if (!this.menus.gm.open) this.menus.toggleSystem(); }
 
       // PageUp / PageDown：切换自动战斗（gamemain.cpp，不说话）
       if (keyPressed.has("PageUp") || keyPressed.has("PageDown")) this.menus.toggleAuto(false);
@@ -704,6 +724,7 @@ class FieldScreen implements Screen {
     };
     for (const l of labels) {
       if (modal || covered(l)) continue; // 对话框和窗口画在名字下面（名字在 2D 覆盖层），打开时先不画名字
+      if (l.bubble && (l.x < -40 || l.x > 840 || l.y < -20 || l.y > 660)) continue; // 人走出画面就不画气泡（以前会贴在画面边上）
       if (l.bubble) {
         // 头顶气泡：每行最多约 16 个字，最多 4 行
         const lines = wrap(l.text, 32).slice(0, 4);

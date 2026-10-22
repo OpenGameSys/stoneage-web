@@ -52,7 +52,7 @@ func (w *World) sendWindow(p, n *entity, kind string, buttons, seq int, text str
 func (w *World) NpcWindowReply(charID, npcID, seq, button int, data string) {
 	w.Do(func() {
 		p := w.players[charID]
-		if p == nil || p.window == nil || p.window.npc != npcID || p.window.seq != seq || p.fight != nil {
+		if p == nil || p.window == nil || p.window.npc != npcID || p.window.seq != seq || p.fight != nil || p.trade != nil || p.stall != nil {
 			return
 		}
 		win := p.window

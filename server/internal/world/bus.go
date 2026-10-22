@@ -17,10 +17,13 @@ import (
 //	上车  面向停着的巴士说话（NPC_BusCheckJoinParty）：开走了不能上（msg_gettingon）、组队中不能上、满员（队伍 5 格，司机占 1 格）、
 //	      带着禁带道具或货物、等级不够、钱不够都不行；付了车资就加入巴士的队伍（CHAR_JoinParty_Main：巴士是队长，乘客跟着它走）。
 //	运行  NPC_BusLoop：mode 0 在站上等 waittime（乘客再对它说话可以提早出发）→ mode 1 每 NPC_BUS_LOOPTIME 走一步
-//	      （朝下一个路线点，被挡住就往旁边滑：NPC_Util_SuberiWalk）→ 走完全部点 mode 3，3 秒后解散队伍（乘客下车）、
+//	      → 走完全部点 mode 3，3 秒后解散队伍（乘客下车）、
 //	      随机挑一条路线、掉头（roundtrip）回到 mode 0。飞机 oneway 时到站后直接传回起点。
 //	巴士的队伍沿用 party.go：巴士实体带一个什么都不送的 nopClient，队员跟随（partyFollow）、换楼层一起传（placeOnFloor）都照旧。
 //	原版的 SE 60（喇叭）与路线名当作称号显示（CHAR_OWNTITLE）这里没有：路线名写在上车的讯息里。
+//	路线  原版 MAP_walkAble 对 CHAR_TYPEBUS（巴士、飞机与它们的乘客）一律回 TRUE：不看通行，每步朝目标点直走（NPC_Util_getDirFromTwoPoint）。
+//	      以前这里照一般 NPC 查通行、被挡就往旁边滑，在桥头会来回打转卡死。现在开机时把每条路线相邻两站之间连成直线的逐格路径
+//	      （busRoute.path，x、y 各自每步靠近 1 格），行驶时只按下标走、回程倒着走，不再临时算；两站不在同一层（飞机）就在那一步传送。
 
 const (
 	busLoopTime = 300 * time.Millisecond // 预设的每步间隔（rules.busStep 可调；原版 NPC_BUS_LOOPTIME 200 ms）：客户端按收到的节奏连续走，乘客跟得上
@@ -43,13 +46,14 @@ var busDefaultMsg = map[string]string{
 
 type busRoute struct {
 	name   string
-	points [][3]int // 楼层, x, y
+	points [][3]int // 楼层, x, y（参数写的站点）
+	path   [][3]int // 开机算好的逐格路径：从 points[0] 到最后一点，相邻两格不是相邻（换楼层 / 找不到路）就传送
 }
 
 type bus struct {
 	routes   []busRoute
 	cur      int  // 现在走的路线
-	point    int  // 下一个要到的点（下标）
+	step     int  // 现在站在 path 的第几格
 	reverse  bool // 回程（NPC_WORK_ROUNDTRIP）
 	mode     int  // 0 停站 1 行驶 3 到站
 	se       bool // seflg：发车、到站时对附近的人放音效 60（CHAR_sendSEoArroundCharacter）
@@ -95,6 +99,7 @@ func (w *World) newBus(n *entity) *bus {
 		if len(r.points) < 2 {
 			return nil
 		}
+		r.path = w.busPath(r.points)
 		b.routes = append(b.routes, r)
 	}
 	if v := npcArgNum(arg, "waittime"); v > 0 {
@@ -112,10 +117,10 @@ func (w *World) newBus(n *entity) *bus {
 		}
 	}
 	b.cur = w.rnd.IntN(len(b.routes))
-	b.point = 1 // 停在第一个点上，下一个是第二个点
+	b.step = 0 // 停在路线的起点上
 	if npcArgNum(arg, "reverse") == 1 {
 		b.reverse = true
-		b.point = len(b.routes[b.cur].points) - 2
+		b.step = len(b.routes[b.cur].path) - 1
 	}
 	b.at = w.now()
 	// 停在路线的起点上（.create 的出生点通常就是它）
@@ -250,63 +255,69 @@ func (w *World) busLoop(n *entity) {
 			p0 := b.routes[b.cur].points[0]
 			w.npcWarp(n, p0[0], p0[1], p0[2])
 			b.cur = w.rnd.IntN(len(b.routes))
-			b.point = 1
+			b.step = 0
 		} else {
 			b.cur = w.rnd.IntN(len(b.routes))
 			b.reverse = !b.reverse
+			b.step = 0
 			if b.reverse {
-				b.point = len(b.routes[b.cur].points) - 2
-			} else {
-				b.point = 1
+				b.step = len(b.routes[b.cur].path) - 1
 			}
 		}
-		b.point = max(0, min(len(b.routes[b.cur].points)-1, b.point))
 		b.mode, b.at = 0, now
 	}
 }
 
-// busWalk 是 NPC_Bus_walk：到了这个点就换下一个；没有下一个就到站。否则朝目标走一步，乘客跟着（partyFollow）。
+// busWalk 是 NPC_Bus_walk 的固定路径版：沿 path 走一格（回程倒着走），乘客跟着（partyFollow）；走到路径尽头就到站。
+// 下一格不在同一层或不相邻（飞机换楼层、开机时没找到路）就传送过去（NPC_BusSetPoint 的 CHAR_warpToSpecificPoint）。
 func (w *World) busWalk(n *entity) {
 	b := n.bus
-	r := b.routes[b.cur]
-	t := r.points[b.point]
-	if n.floor == t[0] && n.x == t[1] && n.y == t[2] {
-		if b.reverse {
-			b.point--
-		} else {
-			b.point++
-		}
-		if b.point < 0 || b.point >= len(r.points) {
-			b.point = max(0, min(len(r.points)-1, b.point))
-			b.mode, b.at = 3, w.now()
-			w.busSE(n)
-			for _, m := range w.busPassengers(n) {
-				w.busSay(n, m, "msg_end")
-			}
+	path := b.routes[b.cur].path
+	next := b.step + 1
+	if b.reverse {
+		next = b.step - 1
+	}
+	if next < 0 || next >= len(path) {
+		b.step = max(0, min(len(path)-1, b.step))
+		b.mode, b.at = 3, w.now()
+		w.busSE(n)
+		for _, m := range w.busPassengers(n) {
+			w.busSay(n, m, "msg_end")
 		}
 		return
 	}
-	if t[0] != n.floor { // 飞机换楼层：巴士与乘客一起传过去（NPC_BusSetPoint 的 CHAR_warpToSpecificPoint）
+	t := path[next]
+	b.step = next
+	if t[0] != n.floor || abs(t[1]-n.x) > 1 || abs(t[2]-n.y) > 1 {
 		w.npcWarp(n, t[0], t[1], t[2])
 		return
 	}
-	dir := moveDir(sign(t[1]-n.x), sign(t[2]-n.y))
-	f := w.game.Floors[n.floor]
-	try := []int{dir, (dir + 7) % 8, (dir + 1) % 8, (dir + 6) % 8, (dir + 2) % 8}
-	for k := 0; k < 3; k++ { // SuberiWalk 滑不过去就随机试几个方向
-		try = append(try, w.rnd.IntN(8))
-	}
-	for _, d := range try {
-		nx, ny := n.x+MOVE[d][0], n.y+MOVE[d][1]
-		if f == nil || !w.game.Tiles.Walkable(f, nx, ny) {
-			continue
-		}
-		ox, oy := n.x, n.y
-		n.x, n.y, n.dir = nx, ny, d
-		w.broadcastMove(n)
-		w.partyFollow(n, ox, oy)
+	if t[1] == n.x && t[2] == n.y {
 		return
 	}
+	ox, oy := n.x, n.y
+	n.x, n.y, n.dir = t[1], t[2], moveDir(t[1]-ox, t[2]-oy)
+	w.broadcastMove(n)
+	w.partyFollow(n, ox, oy)
+}
+
+// busPath 把路线的站点串成逐格路径：同一层的相邻两站之间直线走（x、y 各自每步靠近 1 格，原版 getDirFromTwoPoint 的走法，
+// 不查通行：原版 MAP_walkAble 对巴士一律 TRUE）；换楼层就只接上目标点（行驶时传送）。
+func (w *World) busPath(points [][3]int) [][3]int {
+	path := [][3]int{points[0]}
+	for i := 1; i < len(points); i++ {
+		a, t := points[i-1], points[i]
+		if a[0] != t[0] {
+			path = append(path, t)
+			continue
+		}
+		x, y := a[1], a[2]
+		for x != t[1] || y != t[2] {
+			x, y = x+sign(t[1]-x), y+sign(t[2]-y)
+			path = append(path, [3]int{a[0], x, y})
+		}
+	}
+	return path
 }
 
 // npcWarp 把会走动的 NPC（与它的队伍）传到别的楼层。

@@ -2,6 +2,9 @@ package world
 
 import (
 	"cmp"
+	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"slices"
@@ -63,7 +66,8 @@ var gmMenu = []proto.GmItem{
 		Hint: "升级时的成长倍率：0 是 4.5~5.0 倍，5 是 5.5~6.0 倍"},
 	{Group: "宠物", Cmd: "/petdel", Name: "删除宠物", Args: []string{"宠物"}, Kinds: []string{"pet"}, Hint: "直接从宠物栏拿掉（骑着的会先下来）"},
 	{Group: "宠物", Cmd: "/learnride", Name: "骑乘等级", Args: []string{"可骑等级"}, Kinds: []string{"opt:40|80|120|200"}, Defaults: []string{"200"}, Hint: "骑乘训练师的课程：能骑几级以下的宠物"},
-	{Group: "战斗", Cmd: "/encount", Name: "立即遇敌", Hint: "在遇敌区域里马上开打"},
+	{Group: "战斗", Cmd: "/encount", Name: "立即遇敌", Args: []string{"敌人", "等级"}, Kinds: []string{"enemy", ""}, Defaults: []string{"", ""},
+		Hint: "不填敌人就按这里的遇敌区域开打；填了敌人编号就跟它单挑（哪里都行，等级不填用它的最低等级）"},
 	{Group: "战斗", Cmd: "/noenc", Name: "不遇敌", Hint: "切换：走路不会遇敌"},
 	{Group: "其他", Cmd: "/war", Name: "家族对战", Args: []string{"对战场", "设成"}, Kinds: []string{"", "opt:prepare|fight|end|clear|show"}, Defaults: []string{"1", "show"},
 		Hint: "对战场 1..4 庄园、11..15 家族 PK 场：prepare 现在可进场、fight 马上开打、end 立刻判胜负、clear 清掉排程"},
@@ -75,6 +79,8 @@ var gmMenu = []proto.GmItem{
 	{Group: "管理", Cmd: "/mute", Name: "禁言", Args: []string{"角色", "分钟"}, Kinds: []string{"player", ""}, Defaults: []string{"", "10"}, Hint: "这段时间不能说话；0 分钟是解除（不存档，下线就没了）"},
 	{Group: "管理", Cmd: "/announce", Name: "公告", Args: []string{"内容"}, Kinds: []string{""}, Hint: "发给这条线路上所有的人"},
 	{Group: "管理", Cmd: "/kick", Name: "踢下线", Args: []string{"角色"}, Kinds: []string{"player"}},
+	{Group: "管理", Cmd: "/setpw", Name: "改密码", Args: []string{"角色", "新密码"}, Kinds: []string{"player", ""}, Hint: "替在线玩家的账号改密码（8..64 位；给忘了安全码的人用）"},
+	{Group: "管理", Cmd: "/setsecret", Name: "改安全码", Args: []string{"角色", "安全码"}, Kinds: []string{"player", ""}, Hint: "替在线玩家的账号改安全码（4..32 位）"},
 }
 
 // GmCommand 是 GM 指令选单送来的指令。不是 GM 的角色送来的一律不执行（客户端本来就没有选单，只记一笔）。
@@ -275,16 +281,35 @@ func (w *World) gmCommand(e *entity, text string) bool {
 			e.noenemy = math.MaxInt32
 			reply("不会遇敌了（再按一次恢复）")
 		}
-	case "/encount":
-		a := w.game.Battle.AreaAt(e.floor, e.x, e.y)
-		switch {
-		case e.fight != nil:
+	case "/encount": // /encount [敌人编号 [等级]]：不带参数按遇敌区域；带编号就和那一种敌人单挑（测试没有图的敌人、技能等）
+		if e.fight != nil {
 			reply("已经在战斗中")
-		case a == nil:
-			reply("这里不是遇敌区域")
-		default:
-			w.startBattle(e, a)
+			return true
 		}
+		if len(f) > 1 {
+			id := num(1, 0, math.MaxInt32)
+			lv := 0
+			if len(f) > 2 {
+				lv = num(2, 1, MaxLevel)
+			}
+			en := w.game.Battle.Enemies[id]
+			if bad || en == nil {
+				reply("没有编号 %d 的敌人", id)
+				return true
+			}
+			if lv <= 0 {
+				lv = en.LvMin
+			}
+			s := battle.EnemySpec{Enemy: en, Temp: w.game.Battle.Temps[en.TempNo], Level: lv, DropRate: w.Rules.DropRate}
+			w.startBattleWith(e, []*battle.Fighter{battle.NewEnemy(s, battle.EnemySlot(0), w.game.Battle.Skills, w.rnd)}, nil, nil)
+			return true
+		}
+		a := w.game.Battle.AreaAt(e.floor, e.x, e.y)
+		if a == nil {
+			reply("这里不是遇敌区域")
+			return true
+		}
+		w.startBattle(e, a)
 	case "/announce":
 		msg := strings.TrimSpace(strings.TrimPrefix(text, f[0]))
 		if msg == "" {
@@ -295,6 +320,39 @@ func (w *World) gmCommand(e *entity, text string) bool {
 			p.client.Send(cm)
 		}
 		reply("公告已发给 %d 人", len(w.players))
+	case "/setpw", "/setsecret": // 替在线玩家改账号的密码 / 安全码：明文在这里算成 MD5（客户端平时就是这么送的）
+		t := player(1)
+		if bad || len(f) < 3 {
+			return usage()
+		}
+		if t == nil {
+			return true
+		}
+		v := strings.Join(f[2:], " ")
+		lo, hi, what := 8, 64, "密码"
+		if f[0] == "/setsecret" {
+			lo, hi, what = 4, 32, "安全码"
+		}
+		if n := len(v); n < lo || n > hi {
+			reply("%s要 %d..%d 位", what, lo, hi)
+			return true
+		}
+		sum := md5.Sum([]byte(v))
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		var err error
+		if f[0] == "/setpw" {
+			err = w.db.SetPassword(ctx, t.account, hex.EncodeToString(sum[:]))
+		} else {
+			err = w.db.SetSecret(ctx, t.account, hex.EncodeToString(sum[:]))
+		}
+		if err != nil {
+			reply("改%s失败：%v", what, err)
+			return true
+		}
+		w.log.Info("GM 改了玩家账号的"+what, "gm", e.name, "char", t.name, "account", t.account)
+		gmReply(t, "GM 替你改了"+what)
+		reply("%s（账号 %s）的%s已改", t.name, t.account, what)
 	case "/kick":
 		if len(f) < 2 {
 			return usage()

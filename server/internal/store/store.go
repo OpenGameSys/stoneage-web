@@ -4,9 +4,6 @@ package store
 
 import (
 	"context"
-	"crypto/pbkdf2"
-	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
 	"errors"
@@ -21,6 +18,8 @@ var (
 	ErrExists   = errors.New("已存在")
 	ErrNotFound = errors.New("不存在")
 	ErrBadLogin = errors.New("账号或密码错误")
+	ErrMailFull = errors.New("信箱满了")
+	ErrNoSecret = errors.New("这个账号没有设定安全码")
 )
 
 type Account struct {
@@ -76,8 +75,16 @@ type Character struct {
 }
 
 type Store interface {
-	CreateAccount(ctx context.Context, name, password string) (Account, error)
+	// 账号：password / secret 都是客户端算好的 MD5（32 位十六进制），服务端照存、照比对；secret 是注册时填的安全码，重设密码用
+	CreateAccount(ctx context.Context, name, password, secret string) (Account, error)
 	Authenticate(ctx context.Context, name, password string) (Account, error)
+	// ResetPassword 用安全码重设密码：账号不存在或安全码不对回 ErrBadLogin，账号没有安全码（改版前注册的）回 ErrNoSecret
+	ResetPassword(ctx context.Context, name, secret, password string) error
+	// SetPassword / SetSecret 是 GM 替账号改密码 / 安全码（值同样是 MD5）；账号不存在回 ErrBadLogin
+	SetPassword(ctx context.Context, name, password string) error
+	SetSecret(ctx context.Context, name, secret string) error
+	// AccountInfo 是系统窗口"个人信息"要的：账号名、注册时间、有没有设安全码
+	AccountInfo(ctx context.Context, id int64) (AccountInfo, error)
 	AccountExists(ctx context.Context, name string) (bool, error)
 	ListCharacters(ctx context.Context, accountID int64) ([]Character, error)
 	CreateCharacter(ctx context.Context, c Character) (Character, error)
@@ -180,6 +187,7 @@ var migrations = []string{
 	`CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 	`ALTER TABLE characters ADD COLUMN luck INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE characters ADD COLUMN luck_time INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE accounts ADD COLUMN secret BLOB NOT NULL DEFAULT X''`,
 }
 
 // OpenSQLite 打开（必要时创建）数据库文件。
@@ -202,18 +210,13 @@ func OpenSQLite(path string) (Store, error) {
 	return &sqliteStore{db}, nil
 }
 
-const pbkdf2Iter = 120_000
+// passwordKey 是存进 pass_hash 的内容：客户端已经把密码算成 MD5（32 位十六进制，session.go 检查格式），服务端照存、照比对，
+// 不再做 PBKDF2（pass_salt 栏位留着但是空的）。大小写统一成小写，免得两边的十六进制写法不同。
+func passwordKey(password string) []byte { return []byte(strings.ToLower(password)) }
 
-func hashPassword(password string, salt []byte) []byte {
-	k, _ := pbkdf2.Key(sha256.New, password, salt, pbkdf2Iter, 32)
-	return k
-}
-
-func (s *sqliteStore) CreateAccount(ctx context.Context, name, password string) (Account, error) {
-	salt := make([]byte, 16)
-	rand.Read(salt)
-	res, err := s.db.ExecContext(ctx, `INSERT INTO accounts(name, pass_hash, pass_salt, created_at) VALUES(?,?,?,?)`,
-		name, hashPassword(password, salt), salt, time.Now().Unix())
+func (s *sqliteStore) CreateAccount(ctx context.Context, name, password, secret string) (Account, error) {
+	res, err := s.db.ExecContext(ctx, `INSERT INTO accounts(name, pass_hash, pass_salt, secret, created_at) VALUES(?,?,?,?,?)`,
+		name, passwordKey(password), []byte{}, passwordKey(secret), time.Now().Unix())
 	if err != nil {
 		if isUnique(err) {
 			return Account{}, ErrExists
@@ -222,6 +225,65 @@ func (s *sqliteStore) CreateAccount(ctx context.Context, name, password string) 
 	}
 	id, _ := res.LastInsertId()
 	return Account{ID: id, Name: name}, nil
+}
+
+func (s *sqliteStore) ResetPassword(ctx context.Context, name, secret, password string) error {
+	var id int64
+	var stored []byte
+	err := s.db.QueryRowContext(ctx, `SELECT id, secret FROM accounts WHERE name = ?`, name).Scan(&id, &stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrBadLogin
+	}
+	if err != nil {
+		return err
+	}
+	if len(stored) == 0 {
+		return ErrNoSecret
+	}
+	if subtle.ConstantTimeCompare(stored, passwordKey(secret)) != 1 {
+		return ErrBadLogin
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE accounts SET pass_hash = ?, pass_salt = X'' WHERE id = ?`, passwordKey(password), id)
+	return err
+}
+
+// AccountInfo 是账号的基本资料。
+type AccountInfo struct {
+	Name      string
+	CreatedAt time.Time
+	HasSecret bool
+}
+
+func (s *sqliteStore) AccountInfo(ctx context.Context, id int64) (AccountInfo, error) {
+	var a AccountInfo
+	var created int64
+	var secret []byte
+	err := s.db.QueryRowContext(ctx, `SELECT name, created_at, secret FROM accounts WHERE id = ?`, id).Scan(&a.Name, &created, &secret)
+	if err != nil {
+		return a, err
+	}
+	a.CreatedAt = time.Unix(created, 0)
+	a.HasSecret = len(secret) > 0
+	return a, nil
+}
+
+func (s *sqliteStore) SetPassword(ctx context.Context, name, password string) error {
+	return s.setAccountField(ctx, "pass_hash", name, passwordKey(password))
+}
+
+func (s *sqliteStore) SetSecret(ctx context.Context, name, secret string) error {
+	return s.setAccountField(ctx, "secret", name, passwordKey(secret))
+}
+
+func (s *sqliteStore) setAccountField(ctx context.Context, col, name string, v []byte) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE accounts SET `+col+` = ? WHERE name = ?`, v, name)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrBadLogin
+	}
+	return nil
 }
 
 func (s *sqliteStore) AccountExists(ctx context.Context, name string) (bool, error) {
@@ -237,13 +299,13 @@ func (s *sqliteStore) Authenticate(ctx context.Context, name, password string) (
 	err := s.db.QueryRowContext(ctx, `SELECT id, name, pass_hash, pass_salt FROM accounts WHERE name = ?`, name).
 		Scan(&a.ID, &a.Name, &hash, &salt)
 	if errors.Is(err, sql.ErrNoRows) {
-		hashPassword(password, []byte("timing-equalizer")) // 账号不存在时也做一次哈希，避免靠耗时探测账号
 		return Account{}, ErrBadLogin
 	}
 	if err != nil {
 		return Account{}, err
 	}
-	if subtle.ConstantTimeCompare(hash, hashPassword(password, salt)) != 1 {
+	_ = salt // 旧版（PBKDF2）的账号：hash 是 32 字节的派生值、salt 非空，对不上 MD5，只能重新注册
+	if subtle.ConstantTimeCompare(hash, passwordKey(password)) != 1 {
 		return Account{}, ErrBadLogin
 	}
 	return a, nil
@@ -381,14 +443,24 @@ func (s *sqliteStore) Close() error { return s.db.Close() }
 
 func isUnique(err error) bool { return strings.Contains(err.Error(), "UNIQUE") }
 
+// MailMax 是一个收件人最多存几封离线邮件（原版的 AC 没有上限）；满了就不收，免得被灌爆。
+const MailMax = 50
+
 func (s *sqliteStore) PutMail(ctx context.Context, to int64, body string) error {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM mails WHERE to_char = ?`, to).Scan(&n); err != nil {
+		return err
+	}
+	if n >= MailMax {
+		return ErrMailFull
+	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO mails(to_char, body, created_at) VALUES(?,?,?)`, to, body, time.Now().Unix())
 	return err
 }
 
 // TakeMails 按寄出的顺序取出 to 的邮件并删掉；超过 MailKeep 的不要了。
 func (s *sqliteStore) TakeMails(ctx context.Context, to int64) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT body FROM mails WHERE to_char = ? AND created_at >= ? ORDER BY id`, to, time.Now().Add(-MailKeep).Unix())
+	rows, err := s.db.QueryContext(ctx, `SELECT body FROM mails WHERE to_char = ? AND created_at >= ? ORDER BY id LIMIT ?`, to, time.Now().Add(-MailKeep).Unix(), MailMax)
 	if err != nil {
 		return nil, err
 	}

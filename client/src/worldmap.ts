@@ -1,7 +1,8 @@
 // 世界地图（地图窗口，Ctrl+M / 任务栏"地图"）。原版只有以自己为中心 54×54 格的自动地图（map.cpp createAutoMap：每格 4 个像素的小点，
 // sprdisp.cpp drawAutoMap）；这里重做成一个地图窗口：
 //   · 本区全图：走过看过的格子画成连续的等角菱形（颜色沿用原版 getAutoMapColor：那张图在 0 号调色板下的平均色，物件照占地铺开），
-//     没看过的是暗底，传送点亮青色，自己是会呼吸的金色标记带朝向，旁边的玩家 / NPC 是白 / 黄点，画面现在看到的范围画成框；
+//     没看过的是暗底，传送点亮青色，自己是会呼吸的金色标记带朝向，旁边的玩家是白点、这一层全部的 NPC 是黄点（NpcListReq 向服务端要，
+//     滑鼠停在黄点上显示名字），画面现在看到的范围画成框；
 //   · 缩放（2..16 像素一格）、按住拖动、"全图"按看过的范围缩放、"回到自己"（跟着自己移动）；
 //   · 左边列出去过的区域（楼层名，field.ts 存在 localStorage sa.floors.<角色>），点一下看那一层看过的部分
 //     （格子资料向服务端补要，MapReq 不限楼层；看过的格子本来就记在 sa.seen.<角色>.<楼层>）。
@@ -206,7 +207,7 @@ export class MapWindow {
       ui.pic(this.marks, MAP_X, MAP_Y);
       ui.hitBox(MAP_X, MAP_Y, MAP_X + MAP_W, MAP_Y + MAP_H, "map-area", false);
     }
-    ui.text(x + 28, y + H * 48 - 36, "按住拖动平移　亮青色：传送点　白点：玩家　黄点：NPC　方框：现在画面看到的范围", FONT.GRAY);
+    ui.text(x + 28, y + H * 48 - 36, this.hoverNpc ? `NPC：${this.hoverNpc}` : "按住拖动平移　亮青色：传送点　白点：玩家　黄点：NPC（滑鼠停上去看名字）　方框：现在画面看到的范围", this.hoverNpc ? FONT.YELLOW : FONT.GRAY);
     if (ui.text(x + W * 64 - 28 - measure("关　闭"), y + H * 48 - 36, "关　闭", FONT.AQUA, "map-close")) close();
   }
 
@@ -332,17 +333,42 @@ export class MapWindow {
     ctx.fillRect(0, 0, MAP_W, MAP_H);
   }
 
-  /** 每帧的记号：自己（呼吸的金点 + 朝向）、玩家、NPC、画面范围 */
+  /** 滑鼠停着的 NPC 名字（画在地图上，也写在底行） */
+  hoverNpc = "";
+
+  /** 每帧的记号：这一层全部的 NPC（黄点，滑鼠停着的写名字）、视野内的玩家（白点）、自己（呼吸的金点 + 朝向）、画面范围 */
   private drawMarks(view: FloorView, f: Field, current: boolean) {
     const ctx = this.marks.getContext("2d")!;
     ctx.clearRect(0, 0, MAP_W, MAP_H);
-    if (!current) return;
     const s = ZOOMS[this.zoom], hy = s * 0.75, now = performance.now();
+    const m = this.host.ui.mouse, mx0 = m.x - MAP_X, my0 = m.y - MAP_Y;
+    let hover: { px: number; py: number; name: string; d: number } | null = null;
+    this.hoverNpc = "";
+    const npcs = f.npcList(view.floor) ?? [];
+    for (const n of npcs) {
+      const [px, py] = this.toPx(view, n.x, n.y);
+      if (px < 0 || py < 0 || px > MAP_W || py > MAP_H) continue;
+      ctx.fillStyle = "#ffd84a";
+      ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2); ctx.fill();
+      const d = Math.hypot(px - mx0, py - my0);
+      if (d <= 6 && (!hover || d < hover.d)) hover = { px, py, name: n.name, d };
+    }
+    if (hover) {
+      this.hoverNpc = hover.name;
+      ctx.font = "12px sans-serif";
+      const tw = ctx.measureText(hover.name).width + 8, tx = Math.min(MAP_W - tw, Math.max(0, hover.px + 6)), ty = Math.max(0, hover.py - 18);
+      ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillRect(tx, ty, tw, 16);
+      ctx.fillStyle = "#ffd84a"; ctx.textBaseline = "top"; ctx.fillText(hover.name, tx + 4, ty + 2);
+      ctx.strokeStyle = "#ffd84a"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(hover.px, hover.py, 4, 0, Math.PI * 2); ctx.stroke();
+    }
+    if (!current) return;
     for (const a of f.actors.values()) {
+      if (a.kind !== "player") continue;
       const [px, py] = this.toPx(view, a.x, a.y);
       if (px < 0 || py < 0 || px > MAP_W || py > MAP_H) continue;
-      ctx.fillStyle = a.kind === "player" ? "#ffffff" : "#ffd84a";
-      ctx.beginPath(); ctx.arc(px, py, a.kind === "player" ? 3 : 2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill();
     }
     const me = f.self;
     if (!me) return;

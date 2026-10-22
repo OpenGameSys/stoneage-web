@@ -6,8 +6,8 @@
 //   聊天设定（2）、音效设定（3）、背景音乐（4）、滑鼠设定（6）
 // 坐标都是原版 800×600 模式下的值（这些窗口原版用 lpDraw->xSize 居中或固定在左上角，不再平移）。
 
-import type { PartyMember, S2CNpcWindow, S2CPets, S2CStatus, S2CVendorList, VendorEntry } from "./proto.gen.ts";
-import { FONT, SYS, measure, type Ui } from "./ui.ts";
+import type { PartyMember, S2CAccountInfo, S2CNpcWindow, S2CPets, S2CStatus, S2CVendorList, VendorEntry } from "./proto.gen.ts";
+import { FONT, SYS, measure, type Ui, InputBox } from "./ui.ts";
 import { ItemWindow } from "./items.ts";
 import { TradeWindow } from "./trade.ts";
 import { ActionWindow } from "./actions.ts";
@@ -15,6 +15,7 @@ import { MailWindow } from "./mail.ts";
 import { FamilyWindow } from "./family.ts";
 import { PetWindow } from "./pets.ts";
 import { MapWindow } from "./worldmap.ts";
+import { md5 } from "./md5.ts";
 import { VendorWindow } from "./vendor.ts";
 import type { Field } from "./field.ts";
 import type { Assets } from "./assets.ts";
@@ -122,6 +123,9 @@ export interface MenuHost {
   questReq(): void;                             // 任务日志（QuestReq，打开任务窗口时要一次）
   vendor(cmd: string, title: string, kinds: number[], slots: number[], prices: number[]): void; // 摆摊（Vendor）
   partyKick(slot: number): void;                // 状态窗口队伍页的踢人（lssproto_KTEAM_send）
+  accountReq(): void;                           // 系统窗口"个人信息"：要账号资料（AccountInfoReq）
+  changePassword(old: string, password: string): void; // 都是 MD5
+  changeSecret(password: string, secret: string): void;
 
 
   autoEncount(): boolean;                       // 自动遇敌开着没有
@@ -129,7 +133,7 @@ export interface MenuHost {
   place(): [number, number, number];            // 楼层、x、y
 }
 
-type SystemPage = "main" | "home" | "logout" | "chat" | "se" | "bgm" | "mouse";
+type SystemPage = "main" | "home" | "logout" | "chat" | "se" | "bgm" | "mouse" | "account";
 
 /** 战斗结果窗口里的一只宠物 */
 export interface ResultPet { name: string; exp: number; lvUp: boolean; }
@@ -244,10 +248,10 @@ export class Menus {
   toggleStatus() { const open = !this.statusOpen; if (open) this.closeOthers(); this.statusOpen = open; this.statusPage = 0; }
   togglePets() { const open = !this.petWnd.open; if (open) this.closeOthers(); this.petWnd.toggle(); }
   toggleMap() { this.mapOpen = !this.mapOpen; if (this.mapOpen) { this.mapWnd.reset(); if (this.items.open) this.items.toggle(); } }
-  toggleSystem() { const open = !this.systemOpen; if (open) this.closeOthers(); this.systemOpen = open; this.page = "main"; }
+  toggleSystem() { const open = !this.systemOpen; if (open) this.closeOthers(); this.systemOpen = open; this.go("main"); }
 
   /** 离开地图画面（进战斗、登出）：拿掉宠物改名的 DOM 输入框 */
-  leave() { this.petWnd.leave(); this.gm.leave(); this.vendor.close(false); }
+  leave() { this.petWnd.leave(); this.gm.leave(); this.vendor.close(false); this.removeAccountBoxes(); }
 
   /** 战斗胜利后的结果窗口（menu.cpp BattleResultWndFlag），RESULT_WND_CLOSE_TIME 300 帧后自动关闭 */
   showResult(name: string, exp: number, lvUp: boolean, items: string[], pets: ResultPet[] = []) {
@@ -511,7 +515,10 @@ export class Menus {
     this.ui.image(title, x + w * 32, y + 27);
   }
 
-  private go(page: SystemPage) { this.page = page; }
+  private go(page: SystemPage) {
+    this.page = page;
+    if (page === "account") this.openAccount(); else this.removeAccountBoxes();
+  }
 
   private systemWindow() {
     switch (this.page) {
@@ -522,7 +529,69 @@ export class Menus {
       case "se": return this.seWnd();
       case "bgm": return this.bgmWnd();
       case "mouse": return this.mouseWnd();
+      case "account": return this.accountWnd();
     }
+  }
+
+  // ---------------- 个人信息（H5 新增：原版这一项是私服的充值 / 卡密资料）----------------
+  // 账号名、注册日期、角色数、有没有安全码（AccountInfo），下面两组表单：旧密码 / 新密码 / 确认 → 修改密码；
+  // 目前密码 / 新安全码 → 修改安全码。密码与安全码都只送 MD5；结果（AccountResult）写在聊天栏。
+  private account: S2CAccountInfo | null = null;
+  private acctBoxes: InputBox[] = [];
+
+  setAccountInfo(m: S2CAccountInfo) { this.account = m; }
+  /** 服务端的结果：成功就清空表单 */
+  accountResult(ok: boolean) { if (ok) for (const b of this.acctBoxes) b.value = ""; }
+
+  private openAccount() {
+    this.removeAccountBoxes();
+    this.account = null;
+    this.host.accountReq();
+    const W = 6, wx = (800 - W * 64) / 2, wy = (600 - 9 * 48) / 2;
+    const make = (y: number, max: number) => {
+      const b = new InputBox(this.host.canvas, wx + 150, y, 180, 16, { password: true, maxLength: max });
+      b.el.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Escape") this.go("main"); });
+      return b;
+    };
+    this.acctBoxes = [make(wy + 166, 64), make(wy + 192, 64), make(wy + 218, 64), make(wy + 290, 64), make(wy + 316, 32)];
+  }
+
+  private removeAccountBoxes() { for (const b of this.acctBoxes) b.remove(); this.acctBoxes = []; }
+
+  private accountWnd() {
+    const ui = this.ui, W = 6, H = 9, wx = (800 - W * 64) / 2, wy = (600 - H * 48) / 2;
+    this.frameWnd(wx, wy, W, H, CG.WND_TITLE_SYSTEM);
+    ui.box(wx + 22, wy + 44, wx + W * 64 - 22, wy + H * 48 - 10, "rgba(0,0,0,0.45)", true);
+    const x = wx + 36, a = this.account;
+    let y = wy + 56;
+    ui.text(x, y, "个人信息", FONT.YELLOW); y += 24;
+    if (!a) ui.text(x, y, "读取中…", FONT.GRAY);
+    else {
+      ui.text(x, y, `账号：${a.account}　　角色：${this.host.status?.name ?? ""}`, FONT.WHITE); y += 20;
+      ui.text(x, y, `注册日期：${a.created}　　角色数：${a.chars}　　安全码：${a.hasSecret ? "已设定" : "未设定"}`, FONT.WHITE); y += 20;
+    }
+    const row = (ry: number, label: string, i: number) => {
+      ui.text(x, ry, label, FONT.WHITE);
+      ui.box(wx + 146, ry - 3, wx + 334, ry + 17, "rgba(255,255,255,0.35)", false);
+      if (ui.hitBox(wx + 146, ry - 3, wx + 334, ry + 17, `acct-f${i}`, false) && ui.clicked(`acct-f${i}`)) this.acctBoxes[i]?.focus();
+    };
+    const v = (i: number) => this.acctBoxes[i]?.value ?? "";
+    ui.text(x, wy + 140, "修改密码", FONT.AQUA);
+    row(wy + 166, "目前密码", 0); row(wy + 192, "新 密 码", 1); row(wy + 218, "确认密码", 2);
+    if (ui.text(wx + 146, wy + 244, "【 修改密码 】", FONT.GREEN, "acct-pw")) {
+      if (v(0).length < 8 || v(1).length < 8 || v(1).length > 64) this.host.chat("密码要 8–64 位。", FONT.RED);
+      else if (v(1) !== v(2)) this.host.chat("两次输入的新密码不一样。", FONT.RED);
+      else this.host.changePassword(md5(v(0)), md5(v(1)));
+    }
+    ui.text(x, wy + 266, "修改安全码（找回密码用）", FONT.AQUA);
+    row(wy + 290, "目前密码", 3); row(wy + 316, "新安全码", 4);
+    if (ui.text(wx + 146, wy + 342, "【 修改安全码 】", FONT.GREEN, "acct-secret")) {
+      if (v(3).length < 8) this.host.chat("请输入目前的密码。", FONT.RED);
+      else if (v(4).length < 4 || v(4).length > 32) this.host.chat("安全码要 4–32 位。", FONT.RED);
+      else this.host.changeSecret(md5(v(3)), md5(v(4)));
+    }
+    ui.text(x, wy + 372, "改好之后结果显示在聊天栏；密码与安全码不会以明文送出。", FONT.GRAY);
+    if (this.item(wx + W * 32 - 28, wy + H * 48 - 36, "返　回", "acct-back", FONT.AQUA)) this.go("main");
   }
 
   // 原版 _NEW_SYSTEM_MENU 是 7×8 的三栏窗口，大半是私服功能（充值、卡密等）。这里只放实现了的项目，
@@ -545,7 +614,8 @@ export class Menus {
     }
     y += 34;
     let y2 = wy + 54;
-    if (this.item(x + 140, y2, "    个人信息    ", "sys-status")) { this.toggleSystem(); this.toggleStatus(); } y2 += 34;
+    if (this.item(x + 140, y2, "    个人信息    ", "sys-account")) this.go("account"); y2 += 34;
+    if (this.ui.hovered("sys-account")) this.ui.bottomLine = "账号资料，修改密码与安全码。";
     if (this.item(x + 140, y2, settings.hideOthers ? "    人物显示    " : "    人物屏蔽    ", "sys-hide")) {
       settings.hideOthers = !settings.hideOthers;
       this.host.chat(settings.hideOthers ? "屏蔽周边人物！" : "显示周边人物！", FONT.RED);

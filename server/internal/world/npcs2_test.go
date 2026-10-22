@@ -3,6 +3,7 @@ package world
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"sa/server/internal/data"
 	"sa/server/internal/proto"
@@ -30,6 +31,9 @@ func findFn(t *testing.T, w *World, fn string) *entity {
 // 传言板：空板 → 留言 → 看到自己的留言（内容、名字）；留到第 8 则后能往上一页翻到第 1 则。
 func TestDengon(t *testing.T) {
 	w, db, _ := setup(t)
+	// 传言板是世界协程里同步查库的 NPC，每人隔 dbGap 才理一次（dbBusy）：测试里每次调用都让时钟往前走
+	clock := time.Now()
+	w.now = func() time.Time { clock = clock.Add(dbGap); return clock }
 	n := findFn(t, w, "Dengon")
 	c, cl := besideNPC(t, w, db, "poster", n)
 	id := int(c.ID)

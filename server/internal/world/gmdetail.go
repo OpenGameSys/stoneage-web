@@ -151,6 +151,10 @@ func (w *World) GmDetailReq(charID int, kind string, id int) {
 				hp = maxHP
 			}
 			add("%s　Lv%d　%d 转", t.name, c.Level, c.Trans)
+			add("账号 %s", t.account)
+			if w.now().Before(t.muteUntil) {
+				add("禁言中，还有 %d 分钟", int(t.muteUntil.Sub(w.now()).Minutes())+1)
+			}
 			add("楼层 %d (%d,%d)", t.floor, t.x, t.y)
 			add("HP %d/%d　DP %d", hp, maxHP, c.DP)
 			add("石币 %d　声望 %d", c.Gold, c.Fame/100)

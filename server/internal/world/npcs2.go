@@ -58,6 +58,18 @@ func (w *World) dbCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 2*time.Second)
 }
 
+// dbBusy：世界协程里替这个人同步查库（传言板、强者表）的间隔，不到 dbGap 就不理（刷窗口会卡住整条线路的人）。
+const dbGap = 500 * time.Millisecond
+
+func (w *World) dbBusy(p *entity) bool {
+	now := w.now()
+	if now.Sub(p.dbAt) < dbGap {
+		return true
+	}
+	p.dbAt = now
+	return false
+}
+
 // dengonText 是 NPC_DengonReadString：标题一行，接着第 id−6..id 则留言（每则是"内容\n日期 名字"，空的那则是空行）。
 // 只留最新的 DengonKeep 则。
 func (w *World) dengonText(n *entity, id, maxID int) string {
@@ -90,6 +102,9 @@ func (w *World) dengonMax(n *entity) int {
 
 // dengonOpen 是 NPC_DengonLooked：站在旁边，显示最新的一页，可以留言（宽窗口加输入行）。
 func (w *World) dengonOpen(p, n *entity) {
+	if w.dbBusy(p) {
+		return
+	}
 	maxID := w.dengonMax(n)
 	w.sendWindow(p, n, "wideinput", BtnOK|BtnCancel|BtnPrev, seqDengon, w.dengonText(n, maxID, maxID))
 	p.window.event = maxID // CHAR_WORKSHOPRELEVANT：目前看到第几则
@@ -97,7 +112,7 @@ func (w *World) dengonOpen(p, n *entity) {
 
 // dengonReply 是 NPC_DengonWindowTalked：上一页 / 下一页翻 7 则，确定把输入的文字留在板上（加上日期与名字）。
 func (w *World) dengonReply(p, n *entity, win *npcWindow, button int, text string) {
-	if max(abs(n.x-p.x), abs(n.y-p.y)) > 3 || win.seq != seqDengon {
+	if max(abs(n.x-p.x), abs(n.y-p.y)) > 3 || win.seq != seqDengon || w.dbBusy(p) {
 		return
 	}
 	maxID := w.dengonMax(n)

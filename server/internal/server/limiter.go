@@ -22,8 +22,11 @@ type authEntry struct {
 	touched time.Time
 }
 
+// AuthFailLimit：登录、找回密码连续失败几次就锁住（tests 也用）。
+const AuthFailLimit = 5
+
 const (
-	authFailLimit  = 5
+	authFailLimit  = AuthFailLimit
 	authLockBase   = time.Minute
 	authLockMax    = time.Hour
 	authForget     = 24 * time.Hour // 这么久没动静的记录清掉

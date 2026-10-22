@@ -129,6 +129,11 @@ func (w *World) joinParty(e *entity) {
 	var cands []*entity
 	found := false
 	for _, o := range w.floors[e.floor] {
+		if o.bus != nil && o.x == fx && o.y == fy { // 面前是巴士 / 飞机：按"组队"钮也算上车（原版要对它说话；两种都行）
+			w.busBoard(e, o)
+			e.client.Send(&proto.PartyResult{Request: 1, OK: e.party != nil})
+			return
+		}
 		if o == e || o.kind != "player" || o.x != fx || o.y != fy {
 			continue
 		}

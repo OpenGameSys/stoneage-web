@@ -35,7 +35,7 @@ func findNPC(t *testing.T, w *World, fn, key string) *entity {
 // besideNPC 让一个新角色上线并站到 n 右边一格（世界不检查站的格子能不能走，测试只看对话流程）。
 func besideNPC(t *testing.T, w *World, db store.Store, name string, n *entity) (store.Character, *fakeClient) {
 	t.Helper()
-	acc, _ := db.CreateAccount(context.Background(), name, "pw")
+	acc, _ := db.CreateAccount(context.Background(), name, "pw", "")
 	c, err := db.CreateCharacter(context.Background(), store.Character{AccountID: acc.ID, Name: name, Sprite: 100000, Level: 1,
 		Floor: data.Hometowns[0].Floor, X: data.Hometowns[0].X, Y: data.Hometowns[0].Y, Vital: 5, Str: 5, Tgh: 5, Dex: 5})
 	if err != nil {
