@@ -24,6 +24,9 @@ rules:
   shareExp: true          # 经验共享：战斗结束时还在场的人物、出战宠物、骑宠都拿一样多的经验；false 是原版的谁打倒谁拿
   dropRate: 1             # 战利品机率倍率
   walkSpeed: 1            # 走路速度倍数（0.25..4，1 是原版）
+  battleSpeed: 1          # 战斗演出的速度倍数（0.25..4，1 是原版）：走过去、走回来与攻击等动作动画一起加速
+  enemyGuardRate: 0.5     # 敌人选防御的机会倍率（0..1；1 原版，0 敌人不防御）
+  petDeathLoss: 0         # 宠物在对敌人的战斗里倒下时扣掉几级的成长（0..10；0 不扣，原版只扣忠诚度）
   encounterRate: 1        # 遇敌机率倍率（0 不会遇敌）
   turnTime: 30            # 每回合选指令的秒数（5..300）
   levelUpPoints: 3        # 人物每升一级的加点
@@ -34,4 +37,7 @@ rules:
   noEscapeFloors: [12345, 142, 40001, 40002, 40003, 40004, 40005, 40006, 40007, 40008, 40009, 40010, 8252, 8253, 8254, 8256]  # 按逃跑会被改成防御的楼层（原版 NOTESCAPE）
   worldTrans: 5           # 世界频道要几转（原版 THEWORLDTRANS）
   worldLevel: 140         # 世界频道要几级（THEWORLDLEVEL）
+  allServTrans: 5         # 星球频道（跨线路广播）要几转、几级、每句扣的声望（setup.cf ALLSERVTRANS / ALLSERVLEVEL / ALLSERVSNED）
+  allServLevel: 140
+  allServFame: 1
   worldFame: 1            # 世界频道每句扣的声望，内部值，100 = 显示的 1 点（THEWORLDSNED）

@@ -8,7 +8,7 @@ createnum=1
 time=60000
 dir=4
 graphicname=100439
-name=®©
+name=Îò
 enemy=sb_go|file:100/sb_go.arg
 }
 #########¥À¥ó########
@@ -20,6 +20,6 @@ createnum=1
 time=60000
 dir=4
 graphicname=100432
-name=­ð
+name=ÌÆ
 enemy=sb_dan|file:100/sb_dan.arg
 }

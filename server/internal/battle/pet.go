@@ -23,10 +23,14 @@ const (
 	AIFixPetDead      = -5 * 100
 	CHFixPlayerDead   = -2 // CH_FIX_PLAYERDEAD：玩家倒下时魅力
 	CHFixPetEscape    = -1 // CH_FIX_PETESCAPE：宠物逃走时主人的魅力
-	DefaultMaxAI      = 60 // CHAR_DEFAULTMAXAI：刚捕获的宠物忠诚度最多 60
-	MaxVariableAI     = 100 * 100
-	MinVariableAI     = -100 * 100
-	petSkillSearches  = 50 // PETSKILLSERCHTIME
+	// 击飞（BATTLE_UltimateExtra）：玩家被击飞的魅力、他的宠物与被击飞的宠物的忠诚度（10 级以下减半）
+	CHFixPlayerUltimate = -4
+	AIFixPlayerUltimate = -10 * 100
+	AIFixPetUltimate    = -10 * 100
+	DefaultMaxAI        = 60 // CHAR_DEFAULTMAXAI：刚捕获的宠物忠诚度最多 60
+	MaxVariableAI       = 100 * 100
+	MinVariableAI       = -100 * 100
+	petSkillSearches    = 50 // PETSKILLSERCHTIME
 )
 
 // CaptureRate 是 BATTLE_CaptureCheck 的捕获机率（%）：

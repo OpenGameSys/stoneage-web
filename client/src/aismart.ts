@@ -162,7 +162,7 @@ export function smartChoose(s: AiSettings, c: SmartContext): AiCommand & { key: 
       if (m) send("magic", t.slot, m.slot, `补血：${t.name}`);
       else if (it) send("item", t.slot, it.slot, `补血：${t.name}（${it.name}）`);
       else if (group) send("magic", side, group.slot, `全体补血：${group.magic}`);
-      else out.chat.push("无法回复耐久力了");
+      else out.chat.push("智能战斗：有人耐久力低于补血时机，但身上没有补血的精灵或道具");
     }
   }
 

@@ -189,19 +189,28 @@ func petMaxLevel(p *Pet) int {
 	return MaxLevel
 }
 
-// petGainExp 加经验并升级，返回升了几级（CHAR_LevelUpCheck + 每级 CHAR_PetLevelUp 与 AI_FIX_PETLEVELUP）。
-func (w *World) petGainExp(p *Pet, exp int) int {
+// petGainExp 加经验并升级，返回升了几级（CHAR_LevelUpCheck + CHAR_HandleExp：经验按级累计、升级扣掉；每级 CHAR_PetLevelUp 与 AI_FIX_PETLEVELUP）。
+// 31 级起每升一级主人得到 上一级所需经验/20000 的声望，正式族人另外加到家族的饲育（CHAR_PetLevelUp 的 CoolFish 饲育家族声望，FM_FIX_FMFEED）。
+func (w *World) petGainExp(e *entity, p *Pet, exp int) int {
 	p.Exp += exp
-	ups := 0
+	ups, feed := 0, 0
 	for p.Level < petMaxLevel(p) {
 		next := w.game.Battle.NextLevelExp(p.Level)
 		if next < 0 || p.Exp < next {
 			break
 		}
+		p.Exp -= next
 		p.Level++
 		w.petLevelUp(p)
 		p.addVariableAI(battle.AIFixPetLevelUp)
 		ups++
+		if p.Level > 30 {
+			feed += max(0, w.game.Battle.NextLevelExp(p.Level-2)) / 20000 // exp2 = CHAR_GetLevelExp(level - 1)
+		}
+	}
+	if feed > 0 && e != nil {
+		w.earnFame(e, feed)
+		w.famFame(e, 0, feed)
 	}
 	return ups
 }

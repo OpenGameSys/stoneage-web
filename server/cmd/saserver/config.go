@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -16,6 +18,7 @@ import (
 
 // 文件里的相对路径都以 config.yaml 所在的目录为准。
 type Config struct {
+	Warnings []string `yaml:"-"` // 读设定时发现的问题（写错层级、不认得的项目），开机时记进日志
 	Addr     string      `yaml:"addr"`    // 监听地址
 	Data     string      `yaml:"data"`    // 原版 gmsv 数据（含 map/ 与 npc/）
 	DB       string      `yaml:"db"`      // SQLite 数据库文件
@@ -47,16 +50,22 @@ type RulesConfig struct {
 	WorldTrans    int     `yaml:"worldTrans"`     // 世界频道要几转
 	WorldLevel    int     `yaml:"worldLevel"`     // 世界频道要几级
 	WorldFame     int     `yaml:"worldFame"`      // 世界频道每句扣的声望（内部值，100 = 1 点）
+	AllServTrans  int     `yaml:"allServTrans"`   // 星球频道（跨线路）要几转
+	AllServLevel  int     `yaml:"allServLevel"`   // 星球频道要几级
+	AllServFame   int     `yaml:"allServFame"`    // 星球频道每句扣的声望
 	BusStep       int     `yaml:"busStep"`        // 长毛象巴士 / 加美航空每走一步的毫秒数（越小越快，100..2000）
 	VendorTax     int     `yaml:"vendorTax"`      // 摆摊卖出时抽的税（百分比，0..100；原版 0）
 	WalkSpeed     float64 `yaml:"walkSpeed"`      // 走路速度倍数（0.25..4，1 是原版）
+	BattleSpeed   float64 `yaml:"battleSpeed"`    // 战斗演出的速度倍数（0.25..4，1 是原版）
+	PetDeathLoss  float64 `yaml:"petDeathLoss"`   // 宠物倒下扣掉几级的成长（0..10；0 不扣，照原版）
+	EnemyGuard    float64 `yaml:"enemyGuardRate"` // 敌人选防御的机会倍率（0..1；1 原版，0 不防御）
 }
 
 func rulesConfig(r world.Rules) RulesConfig {
 	return RulesConfig{ExpRate: r.ExpRate, ShareExp: r.ShareExp, DropRate: r.DropRate, EncounterRate: r.EncounterRate,
 		TurnTime: int(r.TurnTime / time.Second), LevelUpPoints: r.LevelUpPoints, GroundItem: int(r.GroundItem / time.Second),
 		GroundPet: int(r.GroundPet / time.Second), GroundGold: int(r.GroundGold / time.Second), FamilyFee: r.FamilyFee,
-		NoEscape: r.NoEscapeFloors, WorldTrans: r.WorldTrans, WorldLevel: r.WorldLevel, WorldFame: r.WorldFame, BusStep: int(r.BusStep / time.Millisecond), VendorTax: r.VendorTax, WalkSpeed: r.WalkSpeed}
+		NoEscape: r.NoEscapeFloors, WorldTrans: r.WorldTrans, WorldLevel: r.WorldLevel, WorldFame: r.WorldFame, AllServTrans: r.AllServTrans, AllServLevel: r.AllServLevel, AllServFame: r.AllServFame, BusStep: int(r.BusStep / time.Millisecond), VendorTax: r.VendorTax, WalkSpeed: r.WalkSpeed, BattleSpeed: r.BattleSpeed, PetDeathLoss: r.PetDeathLoss, EnemyGuard: r.EnemyGuardRate}
 }
 
 // world 检查数值的范围，换成 world.Rules。
@@ -73,17 +82,23 @@ func (c RulesConfig) world() (world.Rules, error) {
 		return world.Rules{}, errors.New("rules.vendorTax 要在 0..100")
 	case c.WalkSpeed < 0.25 || c.WalkSpeed > 4:
 		return world.Rules{}, errors.New("rules.walkSpeed 要在 0.25..4")
+	case c.BattleSpeed < 0.25 || c.BattleSpeed > 4:
+		return world.Rules{}, errors.New("rules.battleSpeed 要在 0.25..4")
+	case c.EnemyGuard < 0 || c.EnemyGuard > 1:
+		return world.Rules{}, errors.New("rules.enemyGuardRate 要在 0..1")
+	case c.PetDeathLoss < 0 || c.PetDeathLoss > 10:
+		return world.Rules{}, errors.New("rules.petDeathLoss 要在 0..10")
 	case c.LevelUpPoints < 0 || c.FamilyFee < 0:
 		return world.Rules{}, errors.New("rules.levelUpPoints、familyFee 不能是负数")
 	case c.GroundItem < 1 || c.GroundPet < 1 || c.GroundGold < 1:
 		return world.Rules{}, errors.New("rules.groundItem / groundPet / groundGold 至少 1 秒")
-	case c.WorldTrans < 0 || c.WorldLevel < 0 || c.WorldFame < 0:
-		return world.Rules{}, errors.New("rules.worldTrans / worldLevel / worldFame 不能是负数")
+	case c.WorldTrans < 0 || c.WorldLevel < 0 || c.WorldFame < 0 || c.AllServTrans < 0 || c.AllServLevel < 0 || c.AllServFame < 0:
+		return world.Rules{}, errors.New("rules.worldTrans / worldLevel / worldFame / allServ* 不能是负数")
 	}
 	return world.Rules{ExpRate: c.ExpRate, ShareExp: c.ShareExp, DropRate: c.DropRate, EncounterRate: c.EncounterRate,
 		TurnTime: sec(c.TurnTime), LevelUpPoints: c.LevelUpPoints, GroundItem: sec(c.GroundItem), GroundPet: sec(c.GroundPet),
 		GroundGold: sec(c.GroundGold), FamilyFee: c.FamilyFee,
-		NoEscapeFloors: c.NoEscape, WorldTrans: c.WorldTrans, WorldLevel: c.WorldLevel, WorldFame: c.WorldFame, BusStep: time.Duration(c.BusStep) * time.Millisecond, VendorTax: c.VendorTax, WalkSpeed: c.WalkSpeed}, nil
+		NoEscapeFloors: c.NoEscape, WorldTrans: c.WorldTrans, WorldLevel: c.WorldLevel, WorldFame: c.WorldFame, AllServTrans: c.AllServTrans, AllServLevel: c.AllServLevel, AllServFame: c.AllServFame, BusStep: time.Duration(c.BusStep) * time.Millisecond, VendorTax: c.VendorTax, WalkSpeed: c.WalkSpeed, BattleSpeed: c.BattleSpeed, PetDeathLoss: c.PetDeathLoss, EnemyGuardRate: c.EnemyGuard}, nil
 
 }
 
@@ -112,6 +127,48 @@ func findConfig() (string, error) {
 	return "", fmt.Errorf("找不到 config.yaml（找过 %v）", cands)
 }
 
+// yamlKeys 是结构体的 yaml 名字（不含 "-"）。
+func yamlKeys(t reflect.Type) map[string]bool {
+	m := map[string]bool{}
+	for i := 0; i < t.NumField(); i++ {
+		if k, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ","); k != "" && k != "-" {
+			m[k] = true
+		}
+	}
+	return m
+}
+
+// checkKeys 找出设定档里不认得的项目：rules 底下的项目写到了最上层（例如 walkSpeed: 3 没缩进到 rules: 底下）时照样套进 rules、
+// 记一条警告；其余不认得的只记警告（拼错的项目原本会被悄悄略过，看起来像设定没生效）。
+func checkKeys(b []byte, file string, cfg *Config) error {
+	var raw map[string]any
+	if err := yaml.Unmarshal(b, &raw); err != nil || raw == nil {
+		return nil
+	}
+	top, rules := yamlKeys(reflect.TypeOf(Config{})), yamlKeys(reflect.TypeOf(RulesConfig{}))
+	for k, v := range raw {
+		switch {
+		case top[k]:
+		case rules[k]:
+			one, _ := yaml.Marshal(map[string]any{k: v})
+			if err := yaml.Unmarshal(one, &cfg.Rules); err != nil {
+				return fmt.Errorf("%s 的 %s：%w", file, k, err)
+			}
+			cfg.Warnings = append(cfg.Warnings, fmt.Sprintf("%s：%s 是游戏规则，应该写在 rules: 底下（这次照样套用了）", filepath.Base(file), k))
+		default:
+			cfg.Warnings = append(cfg.Warnings, fmt.Sprintf("%s：不认得的设定 %s，没有作用", filepath.Base(file), k))
+		}
+	}
+	if r, ok := raw["rules"].(map[string]any); ok {
+		for k := range r {
+			if !rules[k] {
+				cfg.Warnings = append(cfg.Warnings, fmt.Sprintf("%s：rules 底下不认得的设定 %s，没有作用", filepath.Base(file), k))
+			}
+		}
+	}
+	return nil
+}
+
 func loadConfig() (Config, string, error) {
 	cfg := defaultConfig()
 	path, err := findConfig()
@@ -128,6 +185,9 @@ func loadConfig() (Config, string, error) {
 		}
 		if err := yaml.Unmarshal(b, &cfg); err != nil {
 			return cfg, path, fmt.Errorf("%s：%w", p, err)
+		}
+		if err := checkKeys(b, p, &cfg); err != nil {
+			return cfg, path, err
 		}
 	}
 	base := filepath.Dir(path)

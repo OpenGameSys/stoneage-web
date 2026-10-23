@@ -76,6 +76,34 @@ func (w *World) doAction(e *entity, act int, self bool) {
 	}
 }
 
+// mindIcons 是心情图示（_MIND_ICON，anim_tbl.h SPR_heart..SPR_pk，客户端 Alt+Q..P / A..J 送动画编号）。
+var mindIcons = map[int]bool{101296: true, 101297: true, 101300: true, 101301: true, 101302: true, 101299: true, 101289: true, 101292: true,
+	101293: true, 101298: true, 101291: true, 101290: true, 101294: true, 101295: true, 101288: true, 101303: true, 101304: true}
+
+// mindKeep 是会留在头上、新进视野的人也看得到的三种（睡觉、咖啡、强调；lssproto_MA_recv 不清 CHAR_MIND_NUM）。
+var mindKeep = map[int]bool{101290: true, 101294: true, 101288: true}
+
+// Mind 是 lssproto_MA_recv → CHAR_sendMindEffect：战斗中不理；把心情图示广播给看得到自己的人（不含自己，客户端已经先画了）；
+// 留在头上的三种记在 entity.mind（ObjInfo.mind），其余送完就清掉。
+func (w *World) Mind(charID, icon int) {
+	w.Do(func() {
+		e := w.players[charID]
+		if e == nil || e.fight != nil || !mindIcons[icon] {
+			return
+		}
+		e.mind = 0
+		if mindKeep[icon] {
+			e.mind = icon
+		}
+		msg := &proto.ObjMind{ID: e.id, Icon: icon}
+		for _, o := range w.floors[e.floor] {
+			if o.client != nil && o != e && o.visible[e.id] && o.fight == nil {
+				o.client.Send(msg)
+			}
+		}
+	})
+}
+
 // clearAction：走路、开打、传送时动作取消（CHAR_WORKACTION = -1）。
 func (e *entity) clearAction() { e.act = 0 }
 

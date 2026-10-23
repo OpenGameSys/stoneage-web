@@ -2,30 +2,6 @@ NPCCREATE
 #### 从 serv/data-8.0/npc/sa70/beers/beers.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
 
 {
-name=阿喇吉
-floorid=1000
-borncenter=117,101
-dir=6
-time=0
-ignoreinvincible=1
-createnum=1
-enemy=changeevent|file:add80/sa70/beers/beers1.arg
-graphicname=16090
-}
-
-{
-name=布鲁斯
-floorid=3100
-borncenter=55,89
-dir=6
-time=0
-ignoreinvincible=1
-createnum=1
-enemy=changeevent|file:add80/sa70/beers/beers2.arg
-graphicname=16093
-}
-
-{
 name=警卫
 floorid=8231
 borncenter=41,7

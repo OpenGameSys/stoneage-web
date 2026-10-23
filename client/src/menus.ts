@@ -56,11 +56,15 @@ export interface Settings {
   autoBattle: boolean; // 自动战斗（原版 AI_SELECT）
   quickBattle: boolean; // 快速战斗（额外新功能）：不进战斗画面，照战斗设定自动打完
   minimap: boolean;    // 右上角常显小地图（额外新功能，地图窗口里开关）
+  showExp: boolean;    // 系统菜单「经验显示」：打完在聊天栏写得到的经验（menu.cpp 经验开关）
+  names: boolean;      // F11：头顶名字（nameOverTheHeadFlag；原版预设关，这里预设开）
+  mapArt: boolean;     // 地图窗口与小地图用地块 / 建筑的图画（实景），关掉是平均色的色块
 }
 
 const DEFAULTS: Settings = {
   chatLines: 6, chatColor: 0, voice: 3, bgmVolume: 15, bgmPitches: {}, seVolume: 15,
   stereo: true, mute: false, smoothCursor: false, hideOthers: false, autoBattle: false, quickBattle: false, minimap: false,
+  showExp: true, names: true, mapArt: true,
 };
 const KEY = "sa.settings";
 
@@ -353,6 +357,7 @@ export class Menus {
   // MakeWindowDisp(4, 4, 272, 360, 0, -1)：无边框窗口，中心 (mx, my) = (140, 184)，底图 CG_STATUS_WND 画在中心。
   // 字段位置按 _CHARTITLE_STR_ 定义、_NEW_CHARDATA_ 不用时的分支。
   private statusPage = 0; // statusWndNo：0 状态、1 队伍
+  private statusDetail = true; // 状态窗口旁边的详细资料开着
   private statusWindow() {
     if (this.statusPage === 1) { this.statusPartyWindow(); return; }
     const ui = this.ui, st = this.host.status;
@@ -383,6 +388,16 @@ export class Menus {
     y += 17;
     if (ui.image(CG.STATUS_GROUP_BTN, x + 59, y, "st-group") && ui.clicked("st-group")) { this.statusPage = 1; this.host.uiSe(202); } // statusWndNo = 1
     if (ui.image(CG.CLOSE_BTN, x + 173, y, "st-close") && ui.clicked("st-close")) this.statusOpen = false;
+    // 详细资料（额外新功能，像宠物窗口的扩展资料）：标题右边的钮开关，开着时在状态窗口右边另开一个窗口
+    if (ui.text(wx + 214, wy + 8, this.statusDetail ? "［详细▲］" : "［详细▼］", FONT.AQUA, "st-detail")) { this.statusDetail = !this.statusDetail; this.host.uiSe(this.statusDetail ? 202 : 203); }
+    if (ui.hovered("st-detail")) ui.bottomLine = "在旁边列出攻防敏的来源、会心回避、属性、声望、魔法熟练度等详细资料。";
+    if (this.statusDetail && st.detail?.length) {
+      const dx = wx + 276, dy = wy, th = Math.ceil((st.detail.length * 21 + 50) / 48);
+      ui.window(dx, dy, 5, th, "st-detail-wnd");
+      this.rects.push([dx, dy, dx + 320, dy + th * 48]);
+      ui.text(dx + 18, dy + 16, `${st.name}　LV${st.level}`, FONT.YELLOW);
+      st.detail.forEach((l, i) => ui.text(dx + 18, dy + 40 + i * 21, l, i < 4 ? FONT.WHITE : FONT.AQUA));
+    }
     // 头像：_CHARTITLE_STR_ 的 (209+1, 118+13) 是配 _NEW_CHARDATA_ 底图 55266 的，导出资源里没有那张图，
     // 用的是 CG_STATUS_WND，所以取配它的 (209, 118)（量过底图头像框中心在 (210, 119)）
     ui.image(st.face, wx + 209, wy + 118);
@@ -628,6 +643,14 @@ export class Menus {
     if (this.ui.hovered("sys-ai")) this.ui.bottomLine = "自动战斗、快速战斗、自动遇敌，以及人物与宠物每回合的行动。";
     y2 += 34;
 
+    // 经验显示（menu.cpp 10537：开着才在聊天栏写战斗结算的经验）
+    if (this.item(x + 140, y2, settings.showExp ? "    经验关闭    " : "    经验显示    ", "sys-exp")) {
+      settings.showExp = !settings.showExp;
+      this.host.chat(settings.showExp ? "开启经验显示！" : "关闭经验显示！", FONT.RED);
+      this.changed();
+    }
+    if (this.ui.hovered("sys-exp")) this.ui.bottomLine = "打完一场后要不要在聊天栏写得到的经验与物品。";
+    y2 += 34;
     // GM 指令：只有服务端发了 GM 选单（config.yaml 的 gms）才有
     if (this.gm.enabled && this.item(x + 140, y2, "    GM 指令    ", "sys-gm", FONT.YELLOW)) { this.systemOpen = false; this.gm.show(); }
 

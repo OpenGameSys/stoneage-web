@@ -2,7 +2,7 @@
 #   推送 v* 标签：跑测试 → 交叉编译三个平台 + 构建客户端 → 打包 → 建立同名 Release 并上传。
 #   手动 Run workflow：可以填好几个标签（逗号分开，如 v0.1.3,v0.1.4,v0.1.5），每个标签各自检出、构建、发布到各自的 Release，
 #   互相并行；不填就构建当前分支、只留 artifact 不发布。
-#   发布包：saserver-<版本>-<平台>.zip（服务端、客户端页面、gamedata、config.yaml、手册；不含 assets）
+#   发布包：saserver-<版本>-<平台>.zip（服务端、客户端页面、gamedata、config.yaml；不含 assets，也不含 docs——手册在仓库里看）
 #          assets-<版本>.zip（美术与音频，约 0.9 GB，三个平台共用；WebP / Opus 本来就压过，用 store 模式打包）
 name: release
 
@@ -121,14 +121,11 @@ jobs:
           SUFFIX: ${{ steps.ver.outputs.suffix }}
         run: |
           name="saserver-$VER-${{ matrix.target }}"
-          mkdir -p "dist/$name/bin" "dist/$name/client" "dist/$name/docs" "dist/$name/assets"
+          mkdir -p "dist/$name/bin" "dist/$name/client" "dist/$name/assets"
           cp "bin/saserver$SUFFIX" "dist/$name/bin/"
           cp config.yaml README.md "dist/$name/"
           cp -r client/index.html client/dist "dist/$name/client/"
           cp -r gamedata "dist/$name/"
-          # 旧版本可能还没有手册 / 截图，有什么拷什么
-          [ -f docs/手册.md ] && cp docs/手册.md "dist/$name/docs/" || true
-          [ -d docs/screenshots ] && cp -r docs/screenshots "dist/$name/docs/" || true
           printf '把 assets-%s.zip 解开到这个目录（manifest.json 要在 assets/ 里）。\n' "$VER" > "dist/$name/assets/README.txt"
           (cd dist && zip -qr "$name.zip" "$name")
           ls -la dist/*.zip
@@ -188,7 +185,7 @@ jobs:
           # 正文去掉 trailer 行（Co-Authored-By: … 等），再去掉末尾的空行
           git log -1 --format=%b | grep -Ev '^[A-Za-z-]+: ' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > ../notes.md
           if [ ! -s ../notes.md ]; then git log -1 --format=%s > ../notes.md; fi
-          printf '\n---\n解压平台包，再把 assets-*.zip 解到包里的 assets/ 目录，执行 bin/saserver 即可（设定见 config.yaml，用法见 docs/手册.md）。\n' >> ../notes.md
+          printf '\n---\n解压平台包，再把 assets-*.zip 解到包里的 assets/ 目录，执行 bin/saserver 即可（设定见 config.yaml，用法见仓库里的 docs/手册.md）。\n' >> ../notes.md
           cat ../notes.md
       - uses: actions/download-artifact@v4
         with:

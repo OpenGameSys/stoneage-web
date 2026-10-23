@@ -319,8 +319,8 @@ func TestStatusOnEnter(t *testing.T) {
 	if !ok {
 		t.Fatal("进入世界后应收到 Status")
 	}
-	// HP = 4v+s+t+d；1 级升 2 级需 6 经验（exp.txt）；属性按原版 0..100
-	if st.MaxHp != 8*4+6+4+2 || st.HP != st.MaxHp || st.NextExp != 6 || st.MaxMp != 100 || st.Attrs[0] != 50 || st.Attrs[2] != 50 {
+	// HP = 4v+s+t+d；1 级升 2 级需 2 经验（exp.txt 第 2 行，NeedLevelUpTbls[2]）；属性按原版 0..100
+	if st.MaxHp != 8*4+6+4+2 || st.HP != st.MaxHp || st.NextExp != 2 || st.MaxMp != 100 || st.Attrs[0] != 50 || st.Attrs[2] != 50 {
 		t.Fatalf("状态数据不对：%+v", st)
 	}
 }
@@ -433,7 +433,7 @@ func TestLevelUpAndStatUp(t *testing.T) {
 	w.Enter(c, cl)
 	cl.take()
 	var ups int
-	w.Do(func() { ups = w.gainExp(&w.players[int(c.ID)].char, 20) }) // exp.txt：2 级 6、3 级 18
+	w.Do(func() { ups = w.gainExp(w.players[int(c.ID)], 20) }) // exp.txt：1 级升 2 级要 2、2→3 要 6、3→4 要 18（每级从 0 累计）
 	if ups != 2 {
 		t.Fatalf("20 经验应从 1 级升到 3 级，升了 %d", ups)
 	}

@@ -32,6 +32,9 @@ func main() {
 		log.Error("读取设定失败", "file", cfgPath, "err", err)
 		os.Exit(1)
 	}
+	for _, w := range cfg.Warnings {
+		log.Warn("设定", "msg", w)
+	}
 	if err := level.UnmarshalText([]byte(cfg.Log)); err != nil {
 		log.Error("log 要是 debug / info / warn / error", "log", cfg.Log)
 		os.Exit(1)
@@ -52,6 +55,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+	if err := world.MigrateExp(context.Background(), db, game, log); err != nil {
+		log.Error("换算经验存档失败", "err", err)
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -71,6 +78,7 @@ func main() {
 			w := world.New(game, db, log.With("line", gname+n), int64(id))
 			w.GMs = gms
 			w.Rules = rules
+			w.Name = gname + n
 
 			if families == nil {
 				families = w.Families()

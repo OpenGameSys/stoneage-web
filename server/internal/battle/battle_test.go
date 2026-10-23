@@ -146,8 +146,8 @@ func TestPickEnemiesFromRealData(t *testing.T) {
 	if len(bd.Areas) < 1000 || len(bd.Groups) < 600 || len(bd.Enemies) < 2000 || len(bd.Temps) < 1000 {
 		t.Fatalf("数据数量不对：区域 %d 队伍 %d 敌人 %d 模板 %d", len(bd.Areas), len(bd.Groups), len(bd.Enemies), len(bd.Temps))
 	}
-	if bd.NextLevelExp(1) != 6 || bd.NextLevelExp(0) != 2 {
-		t.Fatalf("exp.txt：1 级升 2 级应需 6，得 %d", bd.NextLevelExp(1))
+	if bd.NextLevelExp(1) != 2 || bd.NextLevelExp(2) != 6 || bd.NextLevelExp(0) != 0 {
+		t.Fatalf("exp.txt：1 级升 2 级应需 2（第 2 行）、2 升 3 要 6，得 %d", bd.NextLevelExp(1))
 	}
 	r := rnd(11)
 	tried := 0
@@ -180,5 +180,55 @@ func TestPickEnemiesFromRealData(t *testing.T) {
 	// 萨姆吉尔村外（floor 100）应该有遇敌区域，敌人是乌力一类的低级怪
 	if a := bd.AreaAt(100, 650, 450); a == nil {
 		t.Fatal("floor 100 (650,450) 应在遇敌区域内")
+	}
+}
+
+// 击飞（BATTLE_DamageSub 的 IsUltimate）：一下 ≥ 最大 HP × 1.2 + 20 直接击飞（2）、累计到了也击飞（1）、雷尔不会。
+func TestUltimate(t *testing.T) {
+	b := New(rnd(2))
+	a := &Fighter{Slot: 10, Level: 50, HP: 1000, MaxHP: 1000, Atk: 100000, Quick: 10}
+	d := player(0)
+	d.HP, d.MaxHP = 500, 500
+	e, _ := b.attackOnce(a, d, attackOpts{}, false)
+	if e.Fly != 2 || !e.Dead || !d.Flown || d.HP != 0 {
+		t.Fatalf("一下超过 1.2 倍最大 HP 应直接击飞：%+v flown=%v", e, d.Flown)
+	}
+	a.Atk = 150
+	d = player(0)
+	d.HP, d.MaxHP, d.Def = 100000, 1000, 0
+	fly := 0
+	for i := 0; i < 60 && fly == 0; i++ {
+		e, _ := b.attackOnce(a, d, attackOpts{}, false)
+		fly = e.Fly
+	}
+	if fly != 1 || !d.Flown || d.HP != 0 {
+		t.Fatalf("累计伤害到了应击飞（1）：fly=%d flown=%v hp=%d ultimate=%d", fly, d.Flown, d.HP, d.ultimate)
+	}
+	ler := player(0)
+	ler.Sprite, ler.HP, ler.MaxHP = 101813, 500, 500
+	a.Atk = 100000
+	if e, _ := b.attackOnce(a, ler, attackOpts{}, false); e.Fly != 0 || ler.Flown {
+		t.Fatalf("雷尔不该被击飞：%+v", e)
+	}
+}
+
+// rules.enemyGuardRate：敌人选防御的权重乘上倍率；NoEnemyGuard 完全不防御。
+func TestEnemyGuardScale(t *testing.T) {
+	count := func(scale float64, none bool) int {
+		b := New(rnd(9))
+		b.GuardScale, b.NoEnemyGuard = scale, none
+		f := &Fighter{Slot: EnemySlot(0), Tactics: "at:10;1;1,gu:10"}
+		b.Add(player(0))
+		n := 0
+		for i := 0; i < 2000; i++ {
+			if b.enemyAI(f).Kind == Guard {
+				n++
+			}
+		}
+		return n
+	}
+	full, half, none := count(1, false), count(0.5, false), count(0, true)
+	if none != 0 || half*10 > full*8 || half*10 < full*4 {
+		t.Fatalf("防御次数：原版 %d、0.5 倍 %d、不防御 %d", full, half, none)
 	}
 }

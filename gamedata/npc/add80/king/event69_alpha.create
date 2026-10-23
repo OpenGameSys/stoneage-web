@@ -25,15 +25,3 @@ name=Àï°ºÍÜÍõ
 enemy=changeevent|file:add80/king/event69_6
 }
 
-{
-floorid=2000
-borncorner=49,47,49,47
-time=0
-createnum=1
-dir=4
-ignoreinvincible=1
-graphicname=16021
-name=Ô¸²ØµÄ×æÄ¸
-enemy=changeevent|file:add80/king/event69_7
-}
-

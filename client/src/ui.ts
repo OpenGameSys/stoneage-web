@@ -154,10 +154,18 @@ export class Ui {
   /** StockFontBuffer：左上角对齐。给了 id 则文字可点击，悬停时照原版（hitFlag 2）加闪烁框 (x-3, y-4)–(x+宽+2, y+字高+4) */
   text(x: number, y: number, text: string, color: string, id?: string, size = FONT_SIZE): boolean {
     if (id) {
-      const w = measure(text, size);
-      this.hits.push({ id, x1: x - 2, y1: y - 2, x2: x + w + 2, y2: y + size + 2 });
+      let x1 = x, w = measure(text, size);
+      if (text.startsWith(" ") || text.endsWith(" ")) {
+        // 前后补了空格的字串，drawOverlay 把字放在宋体等宽时那段字的中点；框也以那里为中心、宽是整串的等宽宽度
+        // （黑体的空格窄，用 measure 量会让框偏到字的左边）
+        const lead = text.length - text.trimStart().length;
+        const cx = x + (lead * 7 + monoWidth(text.trim()) / 2) * size / 14;
+        w = monoWidth(text) * size / 14;
+        x1 = Math.round(cx - w / 2);
+      }
+      this.hits.push({ id, x1: x1 - 2, y1: y - 2, x2: x1 + w + 2, y2: y + size + 2 });
       this.interactive.add(id);
-      if (this.hovered(id)) this.box(x - 3, y - 4, x + w + 2, y + size + 4, boxColor(), false);
+      if (this.hovered(id)) this.box(x1 - 3, y - 4, x1 + w + 2, y + size + 4, boxColor(), false);
     }
     this.texts.push({ x, y, text, color, size });
     return id ? this.clicked(id) : false;
@@ -192,6 +200,13 @@ export class Ui {
   }
 }
 
+/** 宋体等宽时的宽度（14 像素字：半角 7、全角 14） */
+function monoWidth(text: string): number {
+  let w = 0;
+  for (const ch of text) w += ch.charCodeAt(0) < 0x100 || (ch >= "｡" && ch <= "ﾟ") ? 7 : 14;
+  return w;
+}
+
 let measureCtx: CanvasRenderingContext2D | null = null;
 export function measure(text: string, size = FONT_SIZE): number {
   measureCtx ??= document.createElement("canvas").getContext("2d");
@@ -199,7 +214,8 @@ export function measure(text: string, size = FONT_SIZE): number {
   return measureCtx!.measureText(text).width;
 }
 
-export const FONT_FAMILY = `"SimSun", "NSimSun", "Songti SC", "Microsoft YaHei", sans-serif`;
+// 黑体类（笔画粗细均匀），不用宋体：宋体的横很细，放大后加上阴影在浅色地面上看起来像重影
+export const FONT_FAMILY = `"Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei", sans-serif`;
 
 /**
  * 画布的像素数跟着它在屏幕上的实际像素数走（CSS 大小 × devicePixelRatio，ResizeObserver 的 device-pixel-content-box，
@@ -234,7 +250,8 @@ export function fitOverlay(canvas: HTMLCanvasElement, ctx: CanvasRenderingContex
   ctx.setTransform(canvas.width / 800, 0, 0, canvas.height / 600, 0, 0);
 }
 
-/** 把界面的文字与方框画到 2D 覆盖层（原版文字带 1 像素黑色阴影） */
+/** 把界面的文字与方框画到 2D 覆盖层。原版是字右下错开 1 像素的黑影；放大后错开的黑影在浅色背景上看起来像重影，
+ * 这里改成一圈贴着字的深色描边（四周一样粗），字形不偏、浅色地面上也清楚 */
 export function drawOverlay(ctx: CanvasRenderingContext2D, ui: Ui) {
   ctx.imageSmoothingEnabled = false;
   for (const p of ui.pics) ctx.drawImage(p.canvas, p.x, p.y);
@@ -242,14 +259,27 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, ui: Ui) {
     if (b.fill) { ctx.fillStyle = b.color; ctx.fillRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1); }
     else { ctx.strokeStyle = b.color; ctx.lineWidth = 1; ctx.strokeRect(b.x1 + 0.5, b.y1 + 0.5, b.x2 - b.x1 - 1, b.y2 - b.y1 - 1); }
   }
-  ctx.textBaseline = "top";
+  // 字的位置：原版是宋体（半角 7 像素、全角 14 像素等宽，字身贴着 y 往下 14 像素），界面的数字靠 padStart 补空格对齐。
+  // 换成黑体后宽度不等宽、字身也偏低，所以：垂直用字身中线（y + 字高/2）对齐；前后补了空格的字串，
+  // 按宋体等宽时那段字的中点放（数字栏、选单项目才对得齐），其余照原样
+  ctx.textBaseline = "middle";
   for (const t of ui.texts) {
-    ctx.font = `${t.size ?? FONT_SIZE}px ${FONT_FAMILY}`;
-    ctx.textAlign = t.align ?? "left";
-    ctx.fillStyle = "#000";
-    ctx.fillText(t.text, t.x + 1, t.y + 1);
+    const size = t.size ?? FONT_SIZE;
+    ctx.font = `${size}px ${FONT_FAMILY}`;
+    let x = t.x, text = t.text, align = t.align ?? "left";
+    if (align === "left" && (text.startsWith(" ") || text.endsWith(" "))) {
+      const lead = text.length - text.trimStart().length;
+      text = text.trim();
+      x = t.x + (lead * 7 + monoWidth(text) / 2) * size / 14;
+      align = "center";
+    }
+    const y = t.y + size / 2 + 0.5;
+    ctx.textAlign = align;
+    ctx.lineJoin = "round"; ctx.miterLimit = 2;
+    ctx.lineWidth = 2.5; ctx.strokeStyle = "rgba(0,0,0,0.8)";
+    ctx.strokeText(text, x, y);
     ctx.fillStyle = t.color;
-    ctx.fillText(t.text, t.x, t.y);
+    ctx.fillText(text, x, y);
   }
 }
 

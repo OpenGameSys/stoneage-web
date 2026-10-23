@@ -1345,32 +1345,11 @@ createnum=1
 enemy=npcgen_warp|2000|93|77
 }
 #line 205
-{
-floorid=2005
-borncorner=10,15,10,15
-time=0
-ignoreinvincible=1
-createnum=1
-enemy=npcgen_warp|2000|66|82
-}
+
 #line 206
-{
-floorid=2000
-borncorner=66,82,66,82
-time=0
-ignoreinvincible=1
-createnum=1
-enemy=npcgen_warp|2005|10|16
-}
+
 # between
-{
-floorid=2005
-borncorner=10,16,10,16
-time=0
-ignoreinvincible=1
-createnum=1
-enemy=npcgen_warp|2000|66|82
-}
+
 #line 208
 {
 floorid=2000

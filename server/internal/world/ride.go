@@ -213,7 +213,7 @@ func (w *World) rideResult(e *entity, ft *fight, exp int) []proto.PetResult {
 	}
 	from := p.Level
 
-	ups := w.petGainExp(p, exp)
+	ups := w.petGainExp(e, p, exp)
 	w.petFeed(e, p, from)
 	return []proto.PetResult{{Slot: e.pets.Ride, Name: p.displayName(), Exp: exp, LevelUp: ups, Level: p.Level}}
 }

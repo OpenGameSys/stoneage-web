@@ -27,6 +27,8 @@ const (
 	fsParty     = 1 << 0
 	fsDuel      = 1 << 1
 	fsPartyChat = 1 << 2
+	fsTell      = 1 << 5 // CHAR_ISTELL：密语频道（PC_ETCFLAG_CHAT_TELL）
+	fsAllServ   = 1 << 11 // 星球频道（PC_ETCFLAG_ALL_SERV，客户端 ETC.ALL_SERV）：关掉就收不到
 	fsCard      = 1 << 3
 	fsTrade     = 1 << 4
 	fsFM        = 1 << 6 // CHAR_ISFM：家族频道（PC_ETCFLAG_CHAT_FM）

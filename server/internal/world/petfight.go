@@ -1,6 +1,7 @@
 package world
 
 import (
+	"fmt"
 	"time"
 
 	"sa/server/internal/battle"
@@ -93,6 +94,29 @@ func (w *World) afterTurn(e *entity, ev []battle.Event) {
 			e.pets.Battle = -1
 			e.char.Charm = max(0, min(100, e.char.Charm+battle.CHFixPetEscape))
 			pets = true
+		case x.Fly > 0 && x.Target == ft.slot+5:
+			// 宠物被击飞（BATTLE_UltimateExtra）：离开战斗、收回（CHAR_DEFAULTPET = -1），P_vs_E 扣忠诚度 AI_FIX_PETULTIMATE（主人 10 级以下减半）
+			if pf := ft.b.F[ft.slot+5]; pf != nil {
+				pf.Escaped = true
+			}
+			e.pets.Battle = -1
+			if !ft.room.pvp && ft.pet >= 0 && e.pets.Pets[ft.pet] != nil {
+				e.pets.Pets[ft.pet].addVariableAI(battle.AIFixPetUltimate / deadDiv(e))
+			}
+			pets = true
+		case x.Fly > 0 && x.Target == ft.slot:
+			// 自己被击飞：宠物一起退场（BATTLE_PetDefaultExit），P_vs_E 扣魅力 CH_FIX_PLAYEULTIMATE 与出战宠物的忠诚度 AI_FIX_PLAYERULTIMATE；
+			// 离开战斗与传回记录点在 resolveTurn → flownHome
+			if pf := ft.b.F[ft.slot+5]; pf != nil {
+				pf.Escaped = true
+			}
+			if !ft.room.pvp {
+				e.char.Charm = max(0, min(100, e.char.Charm+battle.CHFixPlayerUltimate/deadDiv(e)))
+				if ft.pet >= 0 && e.pets.Pets[ft.pet] != nil {
+					e.pets.Pets[ft.pet].addVariableAI(battle.AIFixPlayerUltimate / deadDiv(e))
+				}
+			}
+			pets = true
 		}
 	}
 	if items {
@@ -101,6 +125,14 @@ func (w *World) afterTurn(e *entity, ev []battle.Event) {
 	if pets {
 		w.petsChanged(e)
 	}
+}
+
+// deadDiv 是 BATTLE_NormalDeadExtra / UltimateExtra 的 levelflg：主人 10 级以下惩罚减半。
+func deadDiv(e *entity) int {
+	if e.char.Level <= 10 {
+		return 2
+	}
+	return 1
 }
 
 // settlePet 在战斗结束时把出战宠物的状态写回宠物栏（任何结果都要做）：
@@ -130,8 +162,9 @@ func (w *World) settlePet(e *entity, ft *fight) {
 	p.addVariableAI(pf.AIDelta)
 	if pf.HP <= 0 && !pf.Escaped && !ft.room.pvp { // 倒下的惩罚只有 P_vs_E
 		p.addVariableAI(battle.AIFixPetDead / div)
+		w.petDeathLoss(e, p)
 	}
-	if ft.b.F[ft.slot].HP <= 0 && !ft.room.pvp {
+	if ft.b.F[ft.slot].HP <= 0 && !ft.room.pvp && !ft.b.F[ft.slot].Flown {
 		p.addVariableAI(battle.AIFixPlayerDead / div)
 	}
 	p.HP = max(1, pf.HP)
@@ -161,8 +194,31 @@ func (w *World) settleRecalled(e *entity, ft *fight, pf *battle.Fighter) {
 			div = 2
 		}
 		p.addVariableAI(battle.AIFixPetDead / div)
+		if !ft.room.pvp {
+			w.petDeathLoss(e, p)
+		}
 	}
 	p.HP = max(1, pf.HP)
+}
+
+// petDeathLoss 是额外新功能（rules.petDeathLoss）：宠物在对敌人的战斗里倒下时扣掉成长。
+// 扣的量按 petLevelUp 的平均值算：每项基本状态扣 (成长率 + 2.5) × 档次倍率中间值 × petDeathLoss，不低于 1；原版只扣忠诚度，不扣成长。
+func (w *World) petDeathLoss(e *entity, p *Pet) {
+	n := w.Rules.PetDeathLoss
+	if n <= 0 {
+		return
+	}
+	rank := p.Rank
+	if rank < 0 || rank > 5 {
+		rank = 0
+	}
+	f := float64(rankRand[rank][0]+rankRand[rank][1]) / 2 * 0.01
+	lose := func(v *int, grow int) { *v = max(1, *v-int((float64(grow)+2.5)*f*n)) }
+	lose(&p.Vital, p.Alloc[0])
+	lose(&p.Str, p.Alloc[1])
+	lose(&p.Tgh, p.Alloc[2])
+	lose(&p.Dex, p.Alloc[3])
+	w.sysMsg(e, fmt.Sprintf("%s倒下了，成长减少了。", p.displayName()), colorYellow)
 }
 
 // petKills 是宠物打倒的敌人（BATTLE_AddExp 的 pBidList 是宠物时）。
@@ -197,7 +253,7 @@ func (w *World) petResult(e *entity, ft *fight, exp int) []proto.PetResult {
 	}
 	p := e.pets.Pets[ft.pet]
 	from := p.Level
-	ups := w.petGainExp(p, exp)
+	ups := w.petGainExp(e, p, exp)
 	w.petFeed(e, p, from)
 	return []proto.PetResult{{Slot: ft.pet, Name: p.displayName(), Exp: exp, LevelUp: ups, Level: p.Level}}
 }

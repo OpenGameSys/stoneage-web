@@ -298,6 +298,16 @@ func (w *World) canEquip(e *entity, it *Item, slot int) error {
 	if place != slot && !(place == data.SlotDeco1 && slot == data.SlotDeco2) {
 		return fmt.Errorf("不能装备在那里")
 	}
+	// char_item.c CANNOTEQUIP2：两个饰品位不能装同一种类（ITEM_TYPE 相同）的饰品
+	if place == data.SlotDeco1 {
+		other := data.SlotDeco2
+		if slot == data.SlotDeco2 {
+			other = data.SlotDeco1
+		}
+		if o := w.itemDef(e.inv[other]); o != nil && o.Type == def.Type && e.inv[other] != it {
+			return fmt.Errorf("无法同时装备两个相同类型的物品")
+		}
+	}
 	if e.char.Trans == 0 && def.Level > e.char.Level {
 		return fmt.Errorf("等级不够，无法装备")
 	}

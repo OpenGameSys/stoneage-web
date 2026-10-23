@@ -2,6 +2,7 @@ package world
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"sa/server/internal/data"
@@ -38,8 +39,65 @@ func (w *World) sendQuests(e *entity) {
 	q := w.questLog(e)
 	e.questSig = questSig(q)
 	if e.client != nil {
-		e.client.Send(&proto.QuestLog{Quests: q})
+		e.client.Send(&proto.QuestLog{Quests: q, Available: w.availableQuests(e)})
 	}
+}
+
+// availableQuests 是可以接的任务（额外新功能，原版的任务查询只列接了的）：所有任务交换 NPC（ExChangeMan）的 REQUEST 段里，
+// 事件还没做完、也还没接、条件（EVENT=）现在就成立、不用说暗语（KeyWord）的。任务名用 jobdaily 里写了这个事件 NOWEV= 的那一行，
+// 没有就叫"<NPC名>的委托"；提示是 NPC 名与楼层名；编号是事件编号。同一个事件只列一次。
+func (w *World) availableQuests(e *entity) []proto.QuestEntry {
+	out := []proto.QuestEntry{}
+	seen := map[int]bool{}
+	for fl, es := range w.floors {
+		fname := ""
+		if f := w.game.Floors[fl]; f != nil {
+			fname = f.Name
+		}
+		for _, n := range es {
+			if n.npc == nil || n.npc.Function != "ExChangeMan" || n.npc.Name == "" {
+				continue
+			}
+			for _, b := range strings.Split(n.npc.Arg, "EventEnd") {
+				no, ok := data.ArgField(b, "EventNo")
+				ev := data.Atoi(no)
+				if !ok || ev <= 0 || seen[ev] || e.eventDone(ev) || e.eventNow(ev) {
+					continue
+				}
+				if typ, _ := data.ArgField(b, "TYPE"); !strings.Contains(typ, "REQUEST") {
+					continue
+				}
+				if _, kw := data.ArgField(b, "KeyWord"); kw || w.exEventCheck(e, b, n) < 0 {
+					continue
+				}
+				seen[ev] = true
+				name := w.questNameOf(ev)
+				if name == "" {
+					name = n.npc.Name + "的委托"
+				}
+				hint := n.npc.Name
+				if fname != "" {
+					hint += "（" + fname + "）"
+				}
+				out = append(out, proto.QuestEntry{ID: ev, Name: name, State: "可接", Hint: hint})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// questNameOf：jobdaily 里条件写了 NOWEV=<事件> 的那一行的任务名。
+func (w *World) questNameOf(ev int) string {
+	key := fmt.Sprintf("NOWEV=%d", ev)
+	for _, j := range w.game.Quests {
+		for _, c := range strings.FieldsFunc(j.Rule, func(r rune) bool { return r == ',' || r == '&' }) {
+			if strings.TrimSpace(c) == key {
+				return j.Name
+			}
+		}
+	}
+	return ""
 }
 
 func questSig(q []proto.QuestEntry) string {

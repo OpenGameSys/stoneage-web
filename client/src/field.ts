@@ -8,6 +8,7 @@ import { ANIM, findAction, type AnimAction, type Assets } from "./assets.ts";
 import { sfx } from "./audio.ts";
 import type { Connection } from "./net.ts";
 import type { ObjInfo, S2CEnterFloor, S2CMapData, NpcPos } from "./proto.gen.ts";
+import { loadFloor, saveFloor, type MapRecord } from "./mapcache.ts";
 import type { Quad } from "./renderer.ts";
 
 export const MOVE: [number, number][] = [[-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
@@ -20,6 +21,9 @@ const CG_INVISIBLE = 99;      // 小于等于该值的地块 / 物件编号不�
 const LOOP_ACTS = new Set([6, 7, 8, 9, 4, 3, 11]);
 
 /** 一个会走动的角色（主角、其他玩家、NPC）。 */
+/** 会留在头上的心情图示：睡觉 SPR_asleep、咖啡 SPR_cafe、强调 SPR_accent */
+export const MIND_KEEP = new Set([101290, 101294, 101288]);
+
 export class Actor {
   id: number; name: string; sprite: number; kind: string; level: number;
   x: number; y: number; dir: number;
@@ -33,12 +37,14 @@ export class Actor {
   family = ""; // 家族名（C 字串第 15 段 fmname），画在名字上面
   trade = false; // 交易中（CHAR_ACTTRADE：交易、摆摊的买卖双方）
   vendor = "";  // 摆着的摊位名（CHAR_STREETVENDOR_OPEN，画在头上）
+  mind = 0; mindAt = 0; // 心情图示（_MIND_ICON：动画编号；睡觉 / 咖啡 / 强调循环播，其余播一遍就消失）
 
   constructor(o: ObjInfo) {
     this.id = o.id; this.name = o.name; this.sprite = o.sprite; this.kind = o.kind; this.level = o.level;
     this.x = this.fromX = o.x; this.y = this.fromY = o.y; this.dir = o.dir;
     this.leader = !!o.leader; this.battle = o.battle ?? 0; this.help = !!o.help; this.act = o.action ?? -1; this.family = o.family ?? "";
     this.trade = !!o.trade; this.vendor = o.vendor ?? "";
+    this.mind = o.mind ?? 0; this.mindAt = performance.now();
   }
 
   stepMs = STEP_MS;   // 这一步要走多久：自己走是 STEP_MS；服务端代走（别人、队员、巴士）按两步之间收到的间隔，走得才连贯
@@ -195,7 +201,7 @@ export interface FloorView {
   version: number; seenVersion: number;
 }
 
-interface FloorStore { name: string; tiles: Uint16Array; objs: Uint16Array; walk: Uint8Array; seen: Uint8Array; version: number; seenVersion: number }
+interface FloorStore { name: string; tiles: Uint16Array; objs: Uint16Array; walk: Uint8Array; seen: Uint8Array; version: number; seenVersion: number; ver?: string; loading?: boolean }
 
 export class Field {
   floor = -1; floorName = ""; palette = 0; width = 0; height = 0;
@@ -217,6 +223,7 @@ export class Field {
   wantDir = -1;
   target: [number, number] | null = null;
   hideOthers = false; // 系统菜单「人物屏蔽」：不画其他玩家
+  showNames = true;   // F11：别人头上的名字（nameOverTheHeadFlag）
   corrections = 0;
   private waitingWarp = false;
   private assets: Assets;
@@ -238,6 +245,7 @@ export class Field {
     });
     net.on("ObjAction", (m) => { (this.self?.id === m.id ? this.self : this.actors.get(m.id))?.setAct(m.action); });
     net.on("ObjFamily", (m) => { const a = this.actors.get(m.id); if (a) a.family = m.family; });
+    net.on("ObjMind", (m) => { const a = this.self?.id === m.id ? this.self : this.actors.get(m.id); if (a) { a.mind = m.icon; a.mindAt = performance.now(); } });
     net.on("ObjMark", (m) => {
       const a = this.self?.id === m.id ? this.self : this.actors.get(m.id);
       if (a) { a.leader = m.leader; a.battle = m.battle; a.help = m.help; a.trade = !!m.trade; a.vendor = m.vendor ?? ""; }
@@ -263,7 +271,7 @@ export class Field {
     this.followSteps = [];
     this.forgetNpcs(m.floor); // 这一层的 NPC 清单重新要（巴士会动、按时间出现的人会变）
     this.saveSeen();
-    if (this.floor >= 0) this.cache.set(this.floor, { name: this.floorName, tiles: this.tiles, objs: this.objs, walk: this.walk, seen: this.seen, version: this.mapVersion, seenVersion: this.seenVersion });
+    if (this.floor >= 0) this.cache.set(this.floor, { name: this.floorName, tiles: this.tiles, objs: this.objs, walk: this.walk, seen: this.seen, version: this.mapVersion, seenVersion: this.seenVersion, ver: this.mapVer });
     this.floor = m.floor; this.floorName = m.name; this.palette = m.palette;
     this.width = m.width; this.height = m.height;
     if (m.step > 0) setStepMs(m.step);
@@ -271,7 +279,7 @@ export class Field {
     this.meta.set(m.floor, { name: m.name, w: m.width, h: m.height });
     this.saveMeta();
     const n = m.width * m.height, c = this.cache.get(m.floor);
-    if (c && c.tiles.length === n) {
+    if (c && c.tiles.length === n && (!c.ver || c.ver === m.mapVer)) {
       ({ tiles: this.tiles, objs: this.objs, walk: this.walk, seen: this.seen } = c);
       this.seenVersion = c.seenVersion;
     } else {
@@ -286,7 +294,37 @@ export class Field {
     this.target = null;
     this.waitingWarp = false;
     this.self?.warpTo(m.x, m.y, m.dir);
+    // 先看浏览器里存着的这一层（版本一样才用），读完才向服务端要缺的格子；最多等 800 ms
+    this.mapVer = m.mapVer;
+    const floor = m.floor, ver = m.mapVer;
+    this.cacheWait = performance.now() + 800;
+    loadFloor(floor, ver).then((r) => {
+      if (this.floor !== floor || this.mapVer !== ver) return;
+      if (r && this.mergeRecord(r, this.tiles, this.objs, this.walk, this.width, this.height)) this.mapVersion++;
+      this.cacheWait = 0;
+      this.requestView();
+    });
     this.requestView();
+  }
+
+  mapVer = "";        // 这一层的地图资料版本（EnterFloor.mapVer）
+  private cacheWait = 0; // 在读浏览器里存的地图，这时刻之前先不向服务端要
+
+  /** 把存着的资料补进还没有资料的格子；回传有没有补到 */
+  private mergeRecord(r: MapRecord, tiles: Uint16Array, objs: Uint16Array, walk: Uint8Array, w: number, h: number): boolean {
+    if (r.w !== w || r.h !== h || r.walk.length !== walk.length) return false;
+    let n = 0;
+    for (let k = 0; k < walk.length; k++) if (!walk[k] && r.walk[k]) { tiles[k] = r.tiles[k]; objs[k] = r.objs[k]; walk[k] = r.walk[k]; n++; }
+    return n > 0;
+  }
+
+  /** 收到地图资料后，过一下把那一层存进浏览器（mapcache.ts） */
+  private persist(floor: number) {
+    saveFloor(floor, () => {
+      if (floor === this.floor) return { ver: this.mapVer, w: this.width, h: this.height, tiles: this.tiles, objs: this.objs, walk: this.walk };
+      const c = this.cache.get(floor), meta = this.meta.get(floor);
+      return c && meta && c.ver ? { ver: c.ver, w: meta.w, h: meta.h, tiles: c.tiles, objs: c.objs, walk: c.walk } : null;
+    });
   }
 
   private mapData(m: S2CMapData) {
@@ -295,6 +333,8 @@ export class Field {
     if (m.floor !== this.floor) { // 世界地图看别层时补要的资料
       const c = this.store(m.floor);
       if (!c) return;
+      if (c.ver && m.ver && c.ver !== m.ver) { c.tiles.fill(0); c.objs.fill(0); c.walk.fill(0); } // 资料换过版本：存着的作废
+      c.ver = m.ver || c.ver;
       const fw = this.meta.get(m.floor)!.w, fh = this.meta.get(m.floor)!.h;
       for (let i = 0; i < m.tiles.length; i++) {
         const x = m.x1 + (i % w), y = m.y1 + Math.floor(i / w);
@@ -303,6 +343,7 @@ export class Field {
         c.tiles[k] = m.tiles[i]; c.objs[k] = m.objs[i]; c.walk[k] = m.walk.charCodeAt(i) - 48 + 1;
       }
       c.version++;
+      this.persist(m.floor);
       return;
     }
     for (let i = 0; i < m.tiles.length; i++) {
@@ -315,6 +356,8 @@ export class Field {
       if (!this.seen[k]) { this.seen[k] = 1; this.seenDirty = true; this.seenVersion++; }
     }
     this.mapVersion++;
+    if (m.ver) this.mapVer = m.ver;
+    this.persist(this.floor);
   }
 
   /** 去过的楼层（名字、大小）：读 / 存 localStorage sa.floors.<角色> */
@@ -346,8 +389,13 @@ export class Field {
     const m = this.meta.get(floor);
     if (!m || m.w <= 0 || m.h <= 0 || m.w * m.h > 4_000_000) return null;
     const n = m.w * m.h;
-    c = { name: m.name, tiles: new Uint16Array(n), objs: new Uint16Array(n), walk: new Uint8Array(n), seen: this.loadSeen(n, floor), version: 0, seenVersion: 1 };
+    c = { name: m.name, tiles: new Uint16Array(n), objs: new Uint16Array(n), walk: new Uint8Array(n), seen: this.loadSeen(n, floor), version: 0, seenVersion: 1, loading: true };
     this.cache.set(floor, c);
+    const store = c;
+    loadFloor(floor).then((r) => { // 别层：浏览器里存着什么版本先用着，向服务端补要时版本不同再作废
+      if (r && this.mergeRecord(r, store.tiles, store.objs, store.walk, m.w, m.h)) { store.ver = r.ver; store.version++; }
+      store.loading = false;
+    });
     return c;
   }
 
@@ -364,6 +412,7 @@ export class Field {
 
   /** 世界地图要画的范围里，看过但还没有资料的格子（重新整理之后、或别层的）：按 64×64 一块向服务端补要 */
   requestFloor(v: FloorView, x1: number, y1: number, x2: number, y2: number) {
+    if (v.floor === this.floor ? this.cacheWait > performance.now() : this.cache.get(v.floor)?.loading) return; // 还在读浏览器里存的
     x1 = Math.max(0, x1); y1 = Math.max(0, y1); x2 = Math.min(v.w, x2); y2 = Math.min(v.h, y2);
     for (let by = y1; by < y2; by += 64) for (let bx = x1; bx < x2; bx += 64) {
       const ex = Math.min(x2, bx + 64), ey = Math.min(y2, by + 64);
@@ -425,7 +474,7 @@ export class Field {
   /** 视野内未收到的格子：按行求未知区间，连续且区间相同的行合并成一块请求。 */
   private requestView() {
     const s = this.self;
-    if (!s || this.floor < 0) return;
+    if (!s || this.floor < 0 || this.cacheWait > performance.now()) return;
     let run: number[] | null = null; // [x1, x2, 起始行]
     const flush = (yEnd: number) => {
       if (!run) return;
@@ -675,9 +724,9 @@ export class Field {
       let top = q ? q.y - 4 : ey - 70;
       if (a.vendor) top = Math.min(top, ey - 114); // 摆摊时名字挪到招牌上面
       if (a.kind === "item" || a.kind === "gold") continue; // 地上的道具与石币不标名字，滑鼠停着时显示在下方
-      labels.push({ x: ex, y: top, text: a.name, color: a === s ? "#ffe680" : a.kind === "npc" ? "#9fd3ff" : "#ffffff" });
+      if (a === s || this.showNames) labels.push({ x: ex, y: top, text: a.name, color: a === s ? "#ffe680" : a.kind === "npc" ? "#9fd3ff" : "#ffffff" });
       // 家族名（character.cpp：别人的家族名在名字上方 13 像素，自己的不画）
-      const fam = a !== s && a.family ? 16 : 0;
+      const fam = a !== s && a.family && this.showNames ? 16 : 0;
       if (fam) labels.push({ x: ex, y: top - fam, text: a.family, color: "#ffffff" });
       // 摊位名（character.cpp：szStreetVendorTitle 画在头上）与交易中的记号（CHAR_ACTTRADE）
       let extra = 0;
@@ -693,7 +742,20 @@ export class Field {
         mark(this.mapQuad(35344, ex - 10, ey + 10), ey - 0.3);
         mark(this.mapQuad(35345, ex, ey - 15), ey + 0.7);
       }
+      // 心情图示（character.cpp setCharMind）：人物脚点上方「半身高 + 45」处；睡觉 / 咖啡 / 强调循环，其余播一遍就删
+      if (a.mind) {
+        const def = this.assets.anim(a.mind), act = def?.actions[0];
+        if (act && act.frames.length) {
+          const ms = Math.max(1, act.ticks) * (1000 / 60), idx = Math.floor((now - a.mindAt) / ms);
+          if (idx >= act.frames.length && !MIND_KEEP.has(a.mind)) a.mind = 0;
+          else {
+            const fr = act.frames[idx % act.frames.length];
+            if (fr[0] >= 0) mark(this.imageQuad(fr[0], ex + fr[1], ey + fr[2] - ((q ? q.h / 2 : 30) + 45)), ey + 0.8);
+          }
+        }
+      }
       const my = top - 20 - fam - extra;
+      // 战斗记号：自己头上的也画（快速战斗时人留在地图画面，靠它知道自己在打仗）
       if (a.battle > 0) mark(this.mapQuad(25610 + 2 * ((a.battle - 1) % 10), ex, my));
       else if (a.leader) {
         const def = this.assets.anim(100500), act = def?.actions[0];

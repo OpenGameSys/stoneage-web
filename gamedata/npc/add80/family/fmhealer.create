@@ -61,15 +61,3 @@ name=家族小护士
 enemy=npcgen_fmhealer|1
 }
 
-{
-floorid=2000
-borncorner=50,50,50,50
-time=0
-createnum=1
-dir=4
-ignoreinvincible=1
-graphicname=16023
-name=家族小护士
-enemy=npcgen_fmhealer|1
-}
-

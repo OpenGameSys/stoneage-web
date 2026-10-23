@@ -8,7 +8,7 @@ createnum=1
 time=60000
 dir=4
 graphicname=100407
-name=ＳＢＣ审查员
+name=ＳＢＣ审查员
 enemy=sb_sbc|file:100/sb_sbc.arg
 }
 #########ＪＢＡ砍汉镑########
@@ -20,6 +20,6 @@ createnum=1
 time=60000
 dir=5
 graphicname=100437
-name=ＪＢＡ审查员
+name=ＪＢＡ审查员
 enemy=sb_jba|file:100/sb_jba.arg
 }

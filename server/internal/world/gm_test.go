@@ -86,7 +86,7 @@ func TestPetExt(t *testing.T) {
 		if x.Init[0] != d.Atk || x.Init[1] != d.Def || x.Init[2] != d.Quick || x.Init[3] != d.HP {
 			t.Errorf("1 级的推算值 %v 应等于现在的 攻%d 防%d 敏%d HP%d", x.Init, d.Atk, d.Def, d.Quick, d.HP)
 		}
-		w.petGainExp(p, w.game.Battle.NextLevelExp(10))
+		w.petGainExp(nil, p, w.game.Battle.NextLevelExp(10))
 		x = w.petExt(p)
 		if len(x.Real) != 4 || x.Real[0] <= 0 || x.Real[3] <= 0 {
 			t.Fatalf("升级后应有实际成长：%+v", x.Real)

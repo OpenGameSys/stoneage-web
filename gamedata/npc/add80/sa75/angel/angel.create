@@ -2,19 +2,6 @@ NPCCREATE
 #### 从 serv/data-8.0/npc/sa75/angel/angel.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
 
 {
-floorid=1000
-borncenter=73,72,1,1
-movecenter=20,20,100,100
-time=0
-createnum=1
-dir=4
-ignoreinvincible=1
-graphicname=16154
-name=流浪旅人
-enemy=changeevent|file:add80/sa75/angel/angelitem
-}
-
-{
 floorid=158
 borncenter=7,6,1,1
 movecenter=20,20,100,100

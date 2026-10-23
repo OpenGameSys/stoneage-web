@@ -83,17 +83,6 @@ graphicname=100439
 }
 
 {
-name=¸¥Ë¹ÎÂµÙ
-floorid=2000
-borncenter=46,71
-dir=4
-ignoreinvincible=1
-createnum=1
-enemy=changeevent|file:add80/eden3/lumberjack/windy
-graphicname=16950
-}
-
-{
 name=¿Â±ÈÂÞ¶û
 floorid=7024
 borncenter=16,3

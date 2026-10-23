@@ -252,3 +252,24 @@ func TestVaryAndDeeppoison(t *testing.T) {
 		t.Fatalf("剧毒应转成 7 回合的咒术：%+v", m.Magic)
 	}
 }
+
+// 地球一周：钻地的下一回合打的是下指令时选的目标（不是随机），而且带技能名。
+func TestEarthRoundKeepsTarget(t *testing.T) {
+	er := &data.Skill{Name: "地球一周", Func: "PETSKILL_EarthRound", Option: "攻%+90", Field: 1, Target: 6}
+	for seed := uint64(1); seed <= 20; seed++ {
+		b, _ := skillBattle(seed, bigFoe(15), bigFoe(16), bigFoe(17))
+		petUse(b, er, 16)
+		hit := false
+		for _, e := range petUse(b, er, 15) { // 第二回合的指令不算数
+			if e.Actor == 5 && e.Kind == Attack {
+				hit = true
+				if e.Target != 16 || e.Skill != "地球一周" {
+					t.Fatalf("seed %d：钻出来应打 16 号并显示技能名：%+v", seed, e)
+				}
+			}
+		}
+		if !hit {
+			t.Fatalf("seed %d：第二回合没有攻击", seed)
+		}
+	}
+}

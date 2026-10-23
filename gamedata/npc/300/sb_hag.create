@@ -7,6 +7,6 @@ movecenter=20,20,100,100
 createnum=1
 dir=2
 graphicname=100329
-name=ǐア緗﹁吹
+name=走失的格鲁西斯
 enemy=sb_hag|file:300/sb_hag.arg
 }

@@ -1,79 +1,79 @@
-########ブ焊########
+########皮尔########
 
-NomalMainMsg:临⊿Τ竒筁Θ瑍搂翅
+NomalMainMsg:你还没有经过成人的洗礼喔！
 
-###ōΤ玦羚###
+###身上有勇士火锅###
 EventNo:-1
 TYPE:MESSAGE
 EVENT:LV>0&ITEM=1872
-NomalWindowMsg:竒琌Θ暗ㄆ薄璶ΤΘ剪稱猭翅
+NomalWindowMsg:你已经是成人了，以後做事情要有更成熟的想法喔！
 EventEnd
 
-###ōΤ贺笵ㄣ倒玦羚##
+###身上有三种道具给勇士火锅##
 EventNo:-1 
 TYPE:ACCEPT
 EVENT:LV>0&ITEM=2006&ITEM=2007&ITEM=2008
-AcceptMsg1:垛°碞琌硂妓珇
-ThanksMsg1:и┯粄琌痷タΘ硂妓珇癳倒舧珼驹
-ItemFullMsg:ō狥﹁搭ぶ翴盾
+AcceptMsg1:嗯～就是这三样物品。
+ThanksMsg1:我们承认你是真正的成人了，这样物品送给你，也欢迎你再度挑战。
+ItemFullMsg:你身上的东西可以减少一点吗。
 GetItem:2009
 DelItem:2006*1,2007*1,2008*1
 EventEnd
 
-###ōΤ喘吹も㎝ü空###
+###身上有扬奇洛斯的手爪和邦奇诺的爪###
 EventNo:-1
 TYPE:MESSAGE
 EVENT:LV>0&ITEM=2007&ITEM=2006
-NomalWindowMsg:Τ喘吹も㎝ü空ê或琌Θ㎡
+NomalWindowMsg:只有扬奇洛斯的手爪和邦奇诺的爪，那怎麽代表你是成人呢？！
 EventEnd
 
-###ōΤガ緗箉㎝喘吹も###
+###身上有布鲁顿的牙和扬奇洛斯的手爪###
 EventNo:-1
 TYPE:MESSAGE
 EVENT:LV>0&ITEM=2008&ITEM=2007
-NomalWindowMsg:Τガ緗箉㎝喘吹もê或琌Θ㎡
+NomalWindowMsg:只有布鲁顿的牙和扬奇洛斯的手爪，那怎麽代表你是成人呢？！
 EventEnd
 
-###ōΤガ緗箉㎝ü空###
+###身上有布鲁顿的牙和邦奇诺的爪###
 EventNo:-1
 TYPE:MESSAGE
 EVENT:LV>0&ITEM=2008&ITEM=2006
-NomalWindowMsg:Τガ緗箉㎝ü空ê或琌Θ㎡
+NomalWindowMsg:只有布鲁顿的牙和邦奇诺的爪，那怎麽代表你是成人呢？！
 EventEnd
 
-###ōΤガ緗箉###
+###身上有布鲁顿的牙###
 EventNo:-1
 TYPE:MESSAGE
 EVENT:LV>0&ITEM=2008
-NomalWindowMsg:Τガ緗箉ê或琌Θ㎡
+NomalWindowMsg:只有布鲁顿的牙，那怎麽代表你是成人呢？！
 EventEnd
 
-###ōΤ喘吹も###
+###身上有扬奇洛斯的手爪###
 EventNo:-1
 TYPE:MESSAGE
 EVENT:LV>0&ITEM=2007
-NomalWindowMsg:Τ喘吹もê或琌Θ㎡
+NomalWindowMsg:只有扬奇洛斯的手爪，那怎麽代表你是成人呢？！
 EventEnd
 
-###ōΤü空###
+###身上有邦奇诺的爪###
 EventNo:-1
 TYPE:MESSAGE
 EVENT:LV>0&ITEM=2006
-NomalWindowMsg:Τü空ê或琌Θ㎡
+NomalWindowMsg:只有邦奇诺的爪，那怎麽代表你是成人呢？！
 EventEnd
 
-###钡ヴ叭倒矗ボ###
+###接任务给提示###
 EventNo:-1 
 TYPE:ACCEPT
 EVENT:LV>29&ENDEV=4
-AcceptMsg1:竒钡筁Θ瑍搂琌и緗Τぃ祸Α稱刚刚盾
-AcceptMsg2:パ緗畄ネ常琌ゑ耕瞨┮镑驹秤╡и粄﹚琌痷タΘ
-ThanksMsg1:璶镑偿籔纒驹矮眔空竲喘吹ものガ緗箉и碞粄﹚琌痷タΘ
+AcceptMsg1:你似乎已经接受过成人的洗礼了，但是我们吉鲁有更不同的仪式，你想试试看吗？
+AcceptMsg2:由於吉鲁岛的生物都是比较凶猛的，所以能够战胜牠们的人，我们才认定他是真正的成人。
+ThanksMsg1:只要你能够去荒野上与人龙战斗，并且取得奇诺的脚爪，扬奇洛斯的手爪，以及布鲁顿的牙，我们就认定你是真正的成人。
 EventEnd
 
-###ヴ叭惠璶Θ⒍###
+###告任务需要合成爪７###
 EventNo:-1
 TYPE:MESSAGE
 EVENT:LV>0
-NomalWindowMsg:临⊿Τ竒筁Θ瑍搂翅
+NomalWindowMsg:你还没有经过成人的洗礼喔！
 EventEnd

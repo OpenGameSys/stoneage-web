@@ -2,18 +2,6 @@ NPCCREATE
 #### 从 serv/data-8.0/npc/sa60/tear/tear.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
 
 {
-name=夕姬
-floorid=200
-borncenter=106,1011
-dir=6
-time=0
-ignoreinvincible=1
-createnum=1
-enemy=changeevent|file:add80/sa60/tear/tear.arg
-graphicname=16664
-}
-
-{
 name=洛林
 floorid=8027
 borncenter=10,7
@@ -91,17 +79,5 @@ borncenter=189,513
 ignoreinvincible=1
 createnum=1
 enemy=npcgen_warp|file:add80/sa60/tear/warptear.arg
-}
-
-{
-name=村民
-floorid=3400	
-borncenter=52,79
-dir=6
-time=0
-ignoreinvincible=1
-createnum=1
-enemy=changeevent|file:add80/sa60/tear/tear7.arg
-graphicname=16105
 }
 

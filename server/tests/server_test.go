@@ -84,6 +84,10 @@ func dial(t *testing.T, url string) *client {
 			}
 			var m map[string]any
 			json.Unmarshal(b, &m)
+			// 服务端省略零值（omitempty）：结果类消息没有 ok 就是 false
+			if _, has := m["ok"]; !has && strings.HasSuffix(m["t"].(string), "Result") {
+				m["ok"] = false
+			}
 			c.in <- m
 		}
 	}()
@@ -158,7 +162,7 @@ func (c *client) login(account, name string, line int) int {
 	return id
 }
 
-func num(m map[string]any, k string) int { return int(m[k].(float64)) }
+func num(m map[string]any, k string) int { v, _ := m[k].(float64); return int(v) } // 省略的零值当 0
 
 func TestTwoPlayers(t *testing.T) {
 	url := startServer(t)

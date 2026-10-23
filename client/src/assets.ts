@@ -7,7 +7,7 @@ export interface ImageEntry { set: number; page: number; x: number; y: number; w
 export interface AnimAction { dir: number; type: number; ticks: number; freeze?: number; frames: [number, number, number, number][]; }
 export interface AnimDef { id: number; actions: AnimAction[]; pages: string[]; }
 
-export const ANIM = { ATTACK: 0, DAMAGE: 1, DEAD: 2, STAND: 3, WALK: 4, GUARD: 10 }; // loadsprbin.h ANIM_LIST
+export const ANIM = { ATTACK: 0, DAMAGE: 1, DEAD: 2, STAND: 3, WALK: 4, HAND: 6, GUARD: 10, THROW: 12 }; // loadsprbin.h ANIM_LIST
 const SETS = ["i8", "rgba"];
 
 // 显存里的图集页：没用了很久、总量超过 gpuBudget 时先释放（core 是登录前预加载的界面页，不释放）

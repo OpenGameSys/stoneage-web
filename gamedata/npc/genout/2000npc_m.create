@@ -95,7 +95,7 @@ enemy=npcgen_timeman|file:genout/tman_2000_81_85
 #line 38
 {
 floorid=2000
-borncorner=54,50,54,50
+borncorner=55,52,55,52
 time=0
 createnum=1
 graphicname=16204
@@ -108,7 +108,7 @@ enemy=npcgen_man|file:genout/msg_2000_55_52
 #line 39
 {
 floorid=2000
-borncorner=59,50,59,50
+borncorner=59,52,59,52
 time=0
 createnum=1
 graphicname=16204

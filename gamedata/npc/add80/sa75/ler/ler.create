@@ -60,18 +60,6 @@ graphicname=16939
 }
 
 {
-name=·ç¾«Áé
-floorid=2000
-borncenter=48,71
-dir=4
-time=1
-ignoreinvincible=1
-createnum=1
-enemy=sb_dou|file:add80/sa75/ler/lerpk4.arg
-graphicname=16950
-}
-
-{
 name=À×¶û
 floorid=8519
 borncenter=29,25

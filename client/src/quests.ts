@@ -48,7 +48,8 @@ export class QuestWindow {
   }
 
   /** 服务端送来的任务日志：和上一份比，新出现的行提示 */
-  set(list: QuestEntry[]) {
+  set(list: QuestEntry[], available: QuestEntry[] = []) {
+    this.available = available;
     const before = new Set(this.quests.map((q) => `${q.id}|${q.state}`));
     if (this.loaded) {
       let changed = false;
@@ -72,6 +73,8 @@ export class QuestWindow {
   }
 
   toggle() { this.open = !this.open; if (this.open) { this.page = 0; this.host.refresh(); } }
+  available: QuestEntry[] = []; // 可以接的任务（服务端 availableQuests）
+  tab = 0;                      // 0 我的任务、1 可接任务
 
   /** 追踪中、还没完成的任务 */
   tracking(): QuestEntry[] { return this.quests.filter((q) => this.tracked.has(q.id) && !isDone(q)); }
@@ -95,22 +98,26 @@ export class QuestWindow {
     const ui = this.host.ui, x = X, y = Y;
     ui.window(x, y, W, H, "quest-wnd");
     rects.push([x, y, x + W * 64, y + H * 48]);
-    const pages = Math.max(1, Math.ceil(this.quests.length / PAGE));
-    ui.text(x + W * 32 - 32, y + 16, "任务查询", FONT.YELLOW);
-    const sub = `共 ${this.quests.length} 项　第 ${this.page + 1} / ${pages} 页`;
+    const list = this.tab === 0 ? this.quests : this.available, avail = this.tab === 1;
+    const pages = Math.max(1, Math.ceil(list.length / PAGE));
+    // 分页：我的任务（原版的任务查询）/ 可接任务（额外新功能：现在找 NPC 就能接的委托）
+    (["我的任务", `可接任务（${this.available.length}）`] as const).forEach((t, k) => {
+      if (ui.text(x + 28 + k * 110, y + 16, k === this.tab ? `【${t}】` : `　${t}　`, k === this.tab ? FONT.YELLOW : FONT.AQUA, `quest-tab${k}`) && k !== this.tab) { this.tab = k; this.page = 0; }
+    });
+    const sub = `共 ${list.length} 项　第 ${this.page + 1} / ${pages} 页`;
     ui.text(x + W * 64 - 28 - measure(sub), y + 16, sub, FONT.GRAY);
     ui.text(x + 28, y + 44, "追踪", FONT.AQUA); ui.text(x + 84, y + 44, "编号", FONT.AQUA);
     ui.text(x + 136, y + 44, "任务", FONT.AQUA); ui.text(x + W * 64 - 28 - measure("状态"), y + 44, "状态", FONT.AQUA);
     ui.box(x + 24, y + 62, x + W * 64 - 24, y + 63, "rgba(255,255,255,0.25)", true);
-    if (this.quests.length === 0) ui.text(x + 28, y + 72, "目前没有任务记录。", FONT.GRAY);
-    this.quests.slice(this.page * PAGE, this.page * PAGE + PAGE).forEach((q, i) => {
-      const ry = y + 70 + i * ROW, done = isDone(q), on = this.tracked.has(q.id);
+    if (list.length === 0) ui.text(x + 28, y + 72, avail ? "现在没有可以接的任务。" : "目前没有任务记录。", FONT.GRAY);
+    list.slice(this.page * PAGE, this.page * PAGE + PAGE).forEach((q, i) => {
+      const ry = y + 70 + i * ROW, done = isDone(q), on = !avail && this.tracked.has(q.id);
       const rowId = `quest-r${i}`;
       if (ui.hitBox(x + 24, ry - 3, x + W * 64 - 24, ry + ROW - 5, rowId, false)) {
         ui.box(x + 24, ry - 3, x + W * 64 - 24, ry + ROW - 5, "rgba(255,255,255,0.08)", true);
         ui.bottomLine = q.hint ? `${q.name}：找 ${q.hint}` : done ? `${q.name}：已经完成了。` : `${q.name}：还没有相关的提示。`;
       }
-      if (done) ui.text(x + 32, ry, "　—", FONT.GRAY);
+      if (done || avail) ui.text(x + 32, ry, "　—", FONT.GRAY);
       else if (ui.text(x + 32, ry, on ? "[√]" : "[　]", on ? FONT.GREEN : FONT.WHITE, `quest-t${i}`)) {
         if (on) this.tracked.delete(q.id); else this.tracked.add(q.id);
         this.save();

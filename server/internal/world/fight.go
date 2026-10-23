@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -10,7 +11,6 @@ import (
 	"sa/server/internal/battle"
 	"sa/server/internal/data"
 	"sa/server/internal/proto"
-	"sa/server/internal/store"
 )
 
 const (
@@ -121,6 +121,7 @@ func (w *World) startBattle(e *entity, a *data.EncountArea) {
 // npc、onEnd 见 fight；有 onEnd 的战斗不判定偷袭（BATTLE_SurpriseCheck：WinFunc 不为 NULL 时返回 0）。
 func (w *World) startBattleWith(e *entity, enemies []*battle.Fighter, npc *entity, onEnd func(result string, members []*entity)) {
 	b := battle.New(w.rnd)
+	b.GuardScale, b.NoEnemyGuard = w.Rules.EnemyGuardRate, w.Rules.EnemyGuardRate <= 0
 	w.battleSeq++
 	room := &battleRoom{b: b, started: w.now(), npc: npc, onEnd: onEnd, no: w.battleSeq}
 	for i, m := range w.battleMembers(e) { // 队长在 0，队员依序 1..4（BATTLE_CreateVsEnemy 的 BATTLE_PartyNewEntry）
@@ -187,7 +188,8 @@ func (w *World) joinRoom(room *battleRoom, m *entity, slot int) {
 func (w *World) sendBattleStart(m *entity, field, surprise int) {
 	b := m.fight.b
 	msg := &proto.BattleStart{Field: field, MySlot: m.fight.slot, TurnTime: int(w.Rules.TurnTime / time.Millisecond), Surprise: surprise, Pvp: m.fight.room.pvp,
-		Event: m.fight.room.npc != nil} // eventEnemyFlag：NPC 开的战斗（客户端放头目的战斗音乐）
+		Event: m.fight.room.npc != nil, // eventEnemyFlag：NPC 开的战斗（客户端放头目的战斗音乐）
+		Speed: w.battleSpeedPct()}
 	for _, f := range b.F {
 		if f != nil {
 			msg.Fighters = append(msg.Fighters, w.fighterInfo(m.fight.room, f))
@@ -292,11 +294,54 @@ func (w *World) armTurnTimer(room *battleRoom, events int) {
 	d := w.Rules.TurnTime + time.Duration(events)*1500*time.Millisecond + 5*time.Second
 	room.timer = time.AfterFunc(d, func() {
 		w.Do(func() {
-			if room.turn == turn && len(room.members) > 0 {
+			if room.turn != turn || len(room.members) == 0 {
+				return
+			}
+			if w.now().Sub(room.started) > BattleTimeLimit {
+				w.battleTimeout(room)
+			}
+			if len(room.members) > 0 {
 				w.resolveTurn(room)
 			}
 		})
 	})
+}
+
+// BattleTimeLimit 是 BATTLE_TIME_LIMIT：一场战斗开打 60 分钟后，还没下指令的玩家被请出战斗。
+const BattleTimeLimit = 60 * time.Minute
+
+// battleTimeout 是 BATTLE_TimeOutCheck：时间到了还在等指令（BATTLE_CHARMODE_C_WAIT）的玩家离开战斗（BATTLE_Exit）、拆队，
+// 说"时间到，结束战斗。"；他的人与宠物当作离场，其他人继续。
+func (w *World) battleTimeout(room *battleRoom) {
+	for _, m := range append([]*entity(nil), room.members...) {
+		ft := m.fight
+		if ft == nil || ft.cmd != nil {
+			continue
+		}
+		w.sysMsg(m, "时间到，结束战斗。", colorYellow)
+		room.removeMember(m)
+		ft.b.F[ft.slot].Escaped = true
+		if pf := ft.b.F[ft.slot+5]; pf != nil {
+			pf.Escaped = true
+		}
+		w.endMember(m, -1)
+	}
+	if len(room.members) == 0 {
+		if room.timer != nil {
+			room.timer.Stop()
+		}
+		w.endWatchers(room)
+	}
+}
+
+// flownHome 是 BATTLE_UltimateExtra 里玩家被击飞的后续：传回记录点（CHAR_LASTTALKELDER）、拆队（CHAR_DischargePartyNoMsg）。
+// 魅力与宠物忠诚度的惩罚在 afterTurn 里按事件扣。提示那一句是 H5 加的（原版只在 debug 时说）。
+func (w *World) flownHome(e *entity) {
+	w.leaveParty(e, false)
+	h := w.elderPos(e)
+	w.placeOnFloor(e, h.Floor, h.X, h.Y, e.dir)
+	w.sysMsg(e, "你被击飞了，回到了记录点。", colorYellow)
+	w.save(e)
 }
 
 // BattleCommand 收下玩家这回合的指令，人和宠物的指令都到了（或宠物不在场）就结算。kind 为 item 时 item 是道具栏的格位。
@@ -434,7 +479,7 @@ func (w *World) resolveTurn(room *battleRoom) {
 		msg.Events = append(msg.Events, proto.BattleEvent{Actor: x.Actor, Kind: string(x.Kind), Target: x.Target,
 			Result: string(x.Result), Damage: x.Damage, HP: x.HP, Dead: x.Dead, OK: x.OK, Skill: x.Skill,
 			Status: x.Status, Guardian: x.Guardian, Combo: x.Combo, ActorHp: x.ActorHP, MpDamage: x.MPDamage, Guarded: x.Guarded,
-			PetDamage: x.PetDamage, RideHp: x.RideHP, Fall: x.Fall, Effect: x.Effect, ActorMp: x.ActorMP,
+			PetDamage: x.PetDamage, RideHp: x.RideHP, Fall: x.Fall, Effect: x.Effect, ActorMp: x.ActorMP, Shoot: x.Shoot, Fly: x.Fly,
 			Name: x.Name, Sprite: x.Sprite, Level: x.Level, MaxHp: x.MaxHP, Att: x.Att})
 	}
 	for _, m := range room.members {
@@ -448,16 +493,20 @@ func (w *World) resolveTurn(room *battleRoom) {
 		w.endBattle(room, win)
 		return
 	}
-	// 逃走的人马上离开战斗（BATTLE_Exit），其他人继续打
+	// 逃走的人马上离开战斗（BATTLE_Exit），其他人继续打；被击飞的人也离开（BATTLE_UltimateExtra），传回记录点
 	for _, m := range append([]*entity(nil), room.members...) {
-		if !room.b.F[m.fight.slot].Escaped {
+		p := room.b.F[m.fight.slot]
+		if !p.Escaped && !p.Flown {
 			continue
 		}
-		if room.pvp {
+		if room.pvp && p.Escaped {
 			w.duelEscape(room, m)
 		}
 		room.removeMember(m)
 		w.endMember(m, -1)
+		if p.Flown {
+			w.flownHome(m)
+		}
 	}
 	if len(room.members) == 0 {
 		if room.timer != nil {
@@ -521,9 +570,13 @@ func (w *World) endBattle(room *battleRoom, win int) {
 	result := ""
 	members := append([]*entity(nil), room.members...)
 	for i, m := range members {
+		flown := m.fight != nil && m.fight.b.F[m.fight.slot].Flown
 		r := w.endMember(m, win)
 		if i == 0 {
 			result = r
+		}
+		if flown { // 整场一起结束时被击飞的人也要传回记录点（BATTLE_UltimateExtra）
+			w.flownHome(m)
 		}
 	}
 	room.members = nil
@@ -558,7 +611,7 @@ func (w *World) endMember(e *entity, win int) string {
 		charExp, petExp, rideExp := w.battleExp(e, ft)
 		if p.HP > 0 {
 			res.Exp = charExp
-			res.LevelUp = w.gainExp(c, res.Exp)
+			res.LevelUp = w.gainExp(e, res.Exp)
 			res.Items = w.giveDrops(e, ft.b)
 		}
 		res.Pets = w.petResult(e, ft, petExp)
@@ -567,7 +620,7 @@ func (w *World) endMember(e *entity, win int) string {
 		}
 	}
 	w.settleRide(e, ft)
-	if p.HP <= 0 && !pvp {
+	if p.HP <= 0 && !pvp && !p.Flown { // 被击飞的走 UltimateExtra 那一套（afterTurn），不再算普通倒下
 		// BATTLE_NormalDeadExtra（只有 P_vs_E）：玩家倒下魅力 CH_FIX_PLAYERDEAD（10 级以下减半）
 		div := 1
 		if c.Level <= 10 {
@@ -646,13 +699,20 @@ func (w *World) battleExp(e *entity, ft *fight) (char, pet, ride int) {
 // gainExp 加经验并检查升级，返回升了几级（CHAR_LevelUpCheck）：
 
 // 每升一级 +3 点、魅力 +2（上限 100）、DP +（新等级 × 10）。
-func (w *World) gainExp(c *store.Character, exp int) int {
+// gainExp 是 CHAR_LevelUpCheck + CHAR_HandleExp（_NEWOPEN_MAXEXP）：经验按级累计，够了就扣掉这一级所需、升一级，
+// 扣完还有剩的话送 所需经验/20000 的声望（原版的 if( Myexp > 0 ) CHAR_earnFame）。回传升了几级。
+func (w *World) gainExp(e *entity, exp int) int {
+	c := &e.char
 	c.Exp += exp
-	ups := 0
+	ups, fame := 0, 0
 	for c.Level < MaxLevel {
 		next := w.game.Battle.NextLevelExp(c.Level)
 		if next < 0 || c.Exp < next {
 			break
+		}
+		c.Exp -= next
+		if c.Exp > 0 {
+			fame += next / 20000
 		}
 		c.DP += (c.Level + 1) * 10
 		c.Level++
@@ -660,6 +720,9 @@ func (w *World) gainExp(c *store.Character, exp int) int {
 	}
 	c.Points += ups * w.Rules.LevelUpPoints
 	c.Charm = min(100, c.Charm+ups*CharmPerLevel)
+	if fame > 0 {
+		w.earnFame(e, fame)
+	}
 	return ups
 }
 
@@ -736,7 +799,48 @@ func (w *World) statusOf(e *entity) *proto.Status {
 		HP: hp, MaxHp: s.MaxHP, Mp: min(c.MP, s.MaxMP), MaxMp: s.MaxMP, Atk: s.Atk, Def: s.Def, Agi: s.Quick,
 		Charm: s.Charm, DP: c.DP, Vital: c.Vital, Str: c.Str, Tgh: c.Tgh, Dex: c.Dex,
 		Attrs: s.Attr[:], Hometown: c.Hometown, Trans: c.Trans,
-		Points: c.Points}
+		Points: c.Points, Detail: w.charDetail(e, s)}
+}
+
+// charDetail 是状态窗口旁边的详细资料（额外新功能，像宠物的扩展资料）：每行一段文字，客户端照着画。
+// 本身 = 只按体腕耐敏换算（battle.Derive），装备 = 装备加减（equipMods），会心 / 回避是装备给的加成（原版 CHAR_WORKFIXCRITICAL 等）。
+func (w *World) charDetail(e *entity, s workStats) []string {
+	c := e.char
+	d := battle.Derive(float64(c.Vital*100), float64(c.Str*100), float64(c.Tgh*100), float64(c.Dex*100))
+	sign := func(v int) string {
+		if v >= 0 {
+			return fmt.Sprintf("+%d", v)
+		}
+		return fmt.Sprint(v)
+	}
+	out := []string{
+		fmt.Sprintf("攻击 %d（本身 %d　装备 %s）", s.Atk, d.Atk, sign(s.Atk-d.Atk)),
+		fmt.Sprintf("防御 %d（本身 %d　装备 %s）", s.Def, d.Def, sign(s.Def-d.Def)),
+		fmt.Sprintf("敏捷 %d（本身 %d　装备 %s）", s.Quick, d.Quick, sign(s.Quick-d.Quick)),
+		fmt.Sprintf("耐久力 %d（本身 %d　装备 %s）", s.MaxHP, d.HP, sign(s.MaxHP-d.HP)),
+		fmt.Sprintf("气力上限 %d　会心 %s　回避 %s", s.MaxMP, sign(s.Critical), sign(s.Avoid)),
+		fmt.Sprintf("魅力 %d　运气 %d　转生 %d", s.Charm, s.Luck, c.Trans),
+		fmt.Sprintf("属性 地%d 水%d 火%d 风%d", s.Attr[0], s.Attr[1], s.Attr[2], s.Attr[3]),
+		fmt.Sprintf("声望 %d　DP %d", c.Fame/100, c.DP),
+	}
+	next := -1
+	if w.game.Battle != nil {
+		next = w.game.Battle.NextLevelExp(c.Level)
+	}
+	if next > 0 && c.Level < MaxLevel {
+		out = append(out, fmt.Sprintf("本级经验 %d / %d（还差 %d）", c.Exp, next, max(0, next-c.Exp)))
+	}
+	if e.addExp.power > 0 && e.addExp.secs > 0 {
+		out = append(out, fmt.Sprintf("智慧之果 经验 +%d％（剩 %d 分钟）", e.addExp.power, (e.addExp.secs+59)/60))
+	}
+	if e.pets != nil {
+		out = append(out, fmt.Sprintf("骑乘等级 %d", learnRide(e)))
+	}
+	if m := e.magic; m != nil {
+		out = append(out, fmt.Sprintf("魔法 地%d 水%d 火%d 风%d", m.Lv[0], m.Lv[1], m.Lv[2], m.Lv[3]),
+			fmt.Sprintf("抗魔 地%d 水%d 火%d 风%d", m.Res[0], m.Res[1], m.Res[2], m.Res[3]))
+	}
+	return out
 }
 
 // saveProgress 在后台保存等级与各项数值。

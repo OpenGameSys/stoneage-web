@@ -102,7 +102,10 @@ func goStruct(b *bytes.Buffer, d def) {
 	for _, f := range d.Fields {
 		typ, opt := goType(f.Type)
 		tag := f.Name
-		if opt {
+		// 零值（0、""、false、空阵列）不送，省流量；客户端 proto.gen.ts 的 fillDefaults 照 schema 补回来，
+		// 所以收到的物件和以前一样每个栏位都在。巢状的结构（非指标）omitempty 不会省略，照样送。
+		base := strings.TrimSuffix(f.Type, "?")
+		if opt || isBuiltin(strings.TrimSuffix(base, "[]")) || strings.HasSuffix(base, "[]") {
 			tag += ",omitempty"
 		}
 		fmt.Fprintf(b, "\t%s %s `json:%q`\n", exported(f.Name), typ, tag)
@@ -153,8 +156,63 @@ func genTS(s schema) []byte {
 		fmt.Fprintf(&b, "export type %s = %s;\n", group.name, strings.Join(names, " | "))
 		fmt.Fprintf(&b, "export type %sType = %s[\"t\"];\n\n", group.name, group.name)
 	}
+	// 服务端把零值省略（omitempty），收到后照这张表补回：i 数字 0、s 字串 ""、b false、a 阵列 []、T:型别 巢状、A:型别 巢状阵列；
+	// 选填（?）的不补
+	b.WriteString("// 栏位的预设值表（fillDefaults 用）：i 数字、s 字串、b 布林、a 阵列、T:型别、A:型别阵列\n")
+	b.WriteString("const SCHEMA: Record<string, [string, string][]> = {\n")
+	for _, d := range append(append([]def{}, s.Types...), s.S2C...) {
+		var parts []string
+		for _, f := range d.Fields {
+			if strings.HasSuffix(f.Type, "?") {
+				continue
+			}
+			t := f.Type
+			arr := strings.HasSuffix(t, "[]")
+			t = strings.TrimSuffix(t, "[]")
+			k := ""
+			switch {
+			case arr && isBuiltin(t):
+				k = "a"
+			case arr:
+				k = "A:" + t
+			case t == "int":
+				k = "i"
+			case t == "string":
+				k = "s"
+			case t == "bool":
+				k = "b"
+			default:
+				k = "T:" + t
+			}
+			parts = append(parts, fmt.Sprintf("[%q,%q]", f.Name, k))
+		}
+		fmt.Fprintf(&b, "  %s: [%s],\n", d.Name, strings.Join(parts, ","))
+	}
+	b.WriteString("};\n\n")
+	b.WriteString(fillDefaultsTS)
 	return b.Bytes()
 }
+
+const fillDefaultsTS = `/** 把服务端省略的零值补回去（就地修改，回传同一个物件）：收到的消息每个栏位都在，和服务端没省略时一样 */
+export function fillDefaults<T>(o: T, type?: string): T {
+  const s = SCHEMA[type ?? (o as { t: string }).t];
+  if (!s || !o || typeof o !== "object") return o;
+  const r = o as Record<string, unknown>;
+  for (const [k, kind] of s) {
+    const v = r[k];
+    switch (kind) {
+      case "i": if (v === undefined) r[k] = 0; break;
+      case "s": if (v === undefined) r[k] = ""; break;
+      case "b": if (v === undefined) r[k] = false; break;
+      case "a": if (v === undefined || v === null) r[k] = []; break;
+      default:
+        if (kind.startsWith("A:")) { if (v === undefined || v === null) r[k] = []; else for (const x of v as unknown[]) fillDefaults(x, kind.slice(2)); }
+        else if (kind.startsWith("T:") && v) fillDefaults(v, kind.slice(2));
+    }
+  }
+  return o;
+}
+`
 
 func tsFields(fs []field) string {
 	var parts []string

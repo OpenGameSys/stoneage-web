@@ -127,7 +127,7 @@ func TestAccountInfoAndChange(t *testing.T) {
 	c := dial(t, url)
 	register(t, c, "selfcare")
 	c.send(&proto.AccountInfoReq{})
-	if m := c.expect("AccountInfo"); m["account"] != "selfcare" || m["hasSecret"] != true || m["chars"] != float64(0) {
+	if m := c.expect("AccountInfo"); m["account"] != "selfcare" || m["hasSecret"] != true || num(m, "chars") != 0 {
 		t.Fatalf("账号资料不对：%v", m)
 	}
 	const newPw = "5d41402abc4b2a76b9719d911017c592" // md5("hello")

@@ -3,14 +3,14 @@
 import { Assets } from "./assets.ts";
 import { Sound, setSfx } from "./audio.ts";
 import { MAP_BGM } from "./soundtable.ts";
-import { Connection } from "./net.ts";
-import { Field, MOVE, dirTo, type Label } from "./field.ts";
+import { Connection, trafficRates } from "./net.ts";
+import { Field, MIND_KEEP, MOVE, dirTo, type Label } from "./field.ts";
 import { Renderer } from "./renderer.ts";
 import { LineScreen, CharSelectScreen, LoginScreen, type App, type Screen, CG } from "./screens.ts";
 import { FONT, FONT_FAMILY, FONT_SIZE, InputBox, Mouse, Ui, drawOverlay, fitOverlay, fitView, measure } from "./ui.ts";
-import { FONT_PAL, Menus, settings } from "./menus.ts";
+import { FONT_PAL, Menus, saveSettings, settings } from "./menus.ts";
 import { ACTION_KEYS } from "./actions.ts";
-import { FieldPanel } from "./fieldpanel.ts";
+import { ETC, FieldPanel } from "./fieldpanel.ts";
 import { BattleScreen } from "./battle.ts";
 import { Shop } from "./shop.ts";
 import { PetSkillShop, drawPetSelect } from "./petshop.ts";
@@ -269,13 +269,14 @@ const app: App = {
     c.on("GmMenu", (m) => { gmItems = m.items; if (screen instanceof FieldScreen) screen.setGmMenu(m.items); });
     c.on("AccountInfo", (m) => { if (screen instanceof FieldScreen) screen.menus.setAccountInfo(m); });
     c.on("AccountResult", (m) => { chat(m.message, m.ok ? FONT.GREEN : FONT.RED); if (screen instanceof FieldScreen) screen.menus.accountResult(m.ok); });
-    c.on("QuestLog", (m) => { questLog = m.quests ?? []; if (screen instanceof FieldScreen) screen.setQuests(questLog); });
+    c.on("QuestLog", (m) => { questLog = m.quests ?? []; questAvail = m.available ?? []; if (screen instanceof FieldScreen) screen.setQuests(questLog); });
     c.on("GmList", (m) => { if (screen instanceof FieldScreen) screen.gmList(m.kind, m.entries); });
     c.on("GmDetail", (m) => { if (screen instanceof FieldScreen) screen.gmDetail(m); });
 
 
     c.on("ChatMsg", (m) => {
       if (m.from === "GM" && !m.fromId && screen instanceof FieldScreen) screen.gmReply(m.text); // GM 指令的回应也列在 GM 窗口
+      if (!m.from) { const tell = /^(.+?)告诉你：/.exec(m.text); if (tell) lastTell = tell[1]; } // 密语：记住对方，Ctrl+R 回话
       chat(m.from ? `${m.channel === "world" ? "[世界]" : m.channel === "family" ? "[族]" : ""}${m.from}：${m.text}` : m.text, FONT_PAL[m.color] ?? FONT.WHITE);
     });
 
@@ -325,7 +326,7 @@ const app: App = {
       const back = screen;
       field.target = null;
       // 快速战斗：留在地图画面、音乐不换，BattleScreen 只在背后跑（quickFrame）
-      const quick = settings.quickBattle && !m.watch; // 观战一定看画面
+      const quick = settings.quickBattle && !m.watch && !m.pvp; // 观战一定看画面；玩家决斗（PK）也一定看画面，不走快速战斗
       // 遇敌：SE 215，地图音乐马上停（不淡出），记下来打完再从头播；环境音停掉
       const fieldBgm = audio.currentBgm, bgm = battleBgm(m.pvp || m.event, field.floor, fieldBgm);
       if (!quick) {
@@ -345,6 +346,7 @@ const app: App = {
         chat,
         auto: () => settings.autoBattle || quick,
         quick: () => quick,
+    names: () => settings.names,
         aiSettings: () => loadAi(selfStatus?.name ?? ""),
         aiMemory: () => aiMemory(selfStatus?.name ?? ""),
         myAtk: () => selfStatus?.atk ?? 10,
@@ -370,10 +372,10 @@ const app: App = {
     c.on("BattleEnd", (m) => {
       const pvp = battle?.pvp ?? false;
       battle?.onEnd(m);
-      // 原版开着"经验显示"时在聊天栏写：得到经验：[自己：N UpLv!]（决斗没有经验，只有 DP 的结果窗口）
-      if (m.result === "win" && !pvp) {
-        let s = `得到经验：[自己：${m.exp}${m.levelUp > 0 ? " UpLv!" : ""}] `;
-        for (const p of m.pets ?? []) s += `[${p.name}：${p.exp}${p.levelUp > 0 ? " UpLv!" : ""}] `;
+      // 原版开着"经验显示"时在聊天栏写：得到经验：[自己：N LvUp!]（决斗没有经验，只有 DP 的结果窗口）
+      if (m.result === "win" && !pvp && settings.showExp) {
+        let s = `得到经验：[自己：${m.exp}${m.levelUp > 0 ? " LvUp!" : ""}] `;
+        for (const p of m.pets ?? []) s += `[${p.name}：${p.exp}${p.levelUp > 0 ? " LvUp!" : ""}] `;
         if (m.items?.length) s += `得到物品：[${m.items.map((n) => ` ${n} `).join("")}]`;
         chat(s.trim(), FONT.YELLOW);
       }
@@ -414,6 +416,7 @@ const app: App = {
     if (!app.net) return;
     field = new Field(assets, app.net);
     field.hideOthers = settings.hideOthers;
+    field.showNames = settings.names;
     selfStatus = null;
     gmItems = [];
     chatLog.length = 0;
@@ -440,6 +443,7 @@ let addressBook: AddressEntry[] = [];
 let familyStatus: S2CFamilyStatus | null = null; // F 状态（家族、职位、频道）
 let gmItems: GmItem[] = []; // GM 指令选单（不是 GM 时是空的）
 let questLog: QuestEntry[] = []; // 任务日志（QuestLog，上线与旗标变动时服务端送）
+let questAvail: QuestEntry[] = []; // 可以接的任务（QuestLog.available）
 // 智能战斗学到的伤害：每个角色一份（换角色时换）
 let aiMem: AiMemory | null = null;
 function aiMemory(name: string): AiMemory {
@@ -448,10 +452,42 @@ function aiMemory(name: string): AiMemory {
 }
 function partyActive(): boolean { return party.some((p) => p !== null); }
 function clearParty() { party.fill(null); if (field) field.follower = false; }
+/** F12 截图（gamemain.cpp snapShot：screenshot\\sa年月日_序号.bmp；浏览器里存成 PNG 下载） */
+function snapShot() {
+  try {
+    const c = document.createElement("canvas");
+    c.width = canvas.width; c.height = canvas.height;
+    const g = c.getContext("2d")!;
+    g.drawImage(canvas, 0, 0);
+    g.drawImage(overlay, 0, 0, c.width, c.height);
+    const d = new Date(), p = (n: number) => String(n).padStart(2, "0");
+    download(`sa${p(d.getFullYear() % 100)}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.png`, c.toDataURL("image/png"));
+  } catch (e) { console.error(e); }
+}
+
+function download(name: string, href: string) {
+  const a = document.createElement("a");
+  a.href = href; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+/** 对话储存（netproc.cpp SaveChatData）：浏览器里存成一个文字文件下载 */
+function saveChatFile() {
+  const d = new Date(), p = (n: number) => String(n).padStart(2, "0");
+  const blob = new Blob([chatSaved.join("\\n") + "\\n"], { type: "text/plain;charset=utf-8" });
+  download(`chat${p(d.getFullYear() % 100)}${p(d.getMonth() + 1)}${p(d.getDate())}.txt`, URL.createObjectURL(blob));
+  chatSaved.length = 0;
+}
+
 const chatLog: { text: string; color: string }[] = [];
+let chatScroll = 0;            // 聊天栏往前翻了几行（新讯息来时回到最新，chat.cpp NowChatLine）
+const chatHistory: string[] = []; // 输入历史（MAX_CHAT_HISTORY 64）
+const chatSaved: string[] = [];   // 对话储存开着时记下的讯息（netproc.cpp SaveChatData：[时:分:秒]内容），关掉时存成文件
 function chat(text: string, color: string = FONT.WHITE) {
   for (const line of wrap(text, 96)) chatLog.push({ text: line, color }); // 聊天栏宽约 680 像素，长句折行
-  while (chatLog.length > 50) chatLog.shift();
+  while (chatLog.length > 200) chatLog.shift(); // MAX_CHAT_LINE
+  chatScroll = 0;
+  if (etcFlag & ETC.SAVE) { const d = new Date(), p = (n: number) => String(n).padStart(2, "0"); chatSaved.push(`[${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}]${text}`); }
 }
 
 /** 断线后（多半是服务端重启换了新版）查 index.html 里 main.js 的版本号，和现在跑的不一样就整页重新载入：
@@ -466,11 +502,23 @@ function reloadIfStale() {
 }
 
 const keys = new Set<string>();
+let wheel = 0; // 这一帧滚轮滚了几格（正数往下）
+addEventListener("wheel", (e) => { wheel += Math.sign(e.deltaY); }, { passive: true });
 const keyPressed = new Set<string>(); // 本帧刚按下的键
+/** 心情图示（oft/sys2.cpp：Alt + 键 → SPR_*）：Q 爱心 W 心碎 E 剪刀 R 石头 T 布 Y 尖叫 U 问号 I 青筋 O 乌云 P 汗 A 沉默 S 睡觉 D 咖啡 F 灯泡 G 强调 H 钱 J PK */
+const MIND_KEYS: Record<string, number> = { q: 101296, w: 101297, e: 101300, r: 101301, t: 101302, y: 101299, u: 101289, i: 101292, o: 101293, p: 101298,
+  a: 101291, s: 101290, d: 101294, f: 101295, g: 101288, h: 101303, j: 101304 };
+
 addEventListener("keydown", (e) => {
   keyPressed.add(e.ctrlKey ? `Ctrl+${e.key.toLowerCase()}` : e.key);
+  if (e.altKey && !e.ctrlKey && screen instanceof FieldScreen && document.activeElement?.tagName !== "INPUT" && MIND_KEYS[e.key.toLowerCase()]) {
+    e.preventDefault();
+    screen.sendMind(MIND_KEYS[e.key.toLowerCase()]);
+  }
+  if (e.key === "F11" && screen instanceof FieldScreen) { e.preventDefault(); settings.names = !settings.names; saveSettings(); } // nameOverTheHeadFlag
+  if (e.key === "F12" && screen instanceof FieldScreen) { e.preventDefault(); snapShot(); }
   // 游戏里 Ctrl+S 是状态窗口、Ctrl+M 是地图、Ctrl+P 是宠物（原版 JOY_CTRL_S / JOY_CTRL_M / JOY_CTRL_P），不能让浏览器弹出"保存网页""打印"
-  if (screen instanceof FieldScreen && e.ctrlKey && ["s", "i", "m", "p", "a", "t", "w", "q", "e", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", "=", "\\"].includes(e.key.toLowerCase())) e.preventDefault();
+  if (screen instanceof FieldScreen && e.ctrlKey && ["s", "i", "m", "p", "a", "t", "w", "q", "e", "r", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", "=", "\\"].includes(e.key.toLowerCase())) e.preventDefault(); // Ctrl+R 是密语回话，不能让浏览器重载
   if (screen instanceof FieldScreen && document.activeElement?.tagName !== "INPUT" && e.key.startsWith("Arrow")) {
     keys.add(e.key); e.preventDefault();
   }
@@ -487,7 +535,7 @@ function keyDir(): number {
 
 class FieldScreen implements Screen {
   private input: InputBox | null = null;
-  private channel: "near" | "party" | "family" | "world" = "near";
+  private channel: "near" | "party" | "family" | "world" | "allserv" = "near";
   private talkTarget: number | null = null;
   private moveMode = false; // 原版 MOUSE_CURSOR_MODE_MOVE
   private moveTick = 0;
@@ -532,7 +580,7 @@ class FieldScreen implements Screen {
       field = null;
       app.go(new CharSelectScreen(app));
     },
-    settingsChanged: () => { if (field) field.hideOthers = settings.hideOthers; applyCursor(); audio.apply(); },
+    settingsChanged: () => { if (field) { field.hideOthers = settings.hideOthers; field.showNames = settings.names; } applyCursor(); audio.apply(); },
     field: () => field,
     assets, root: ASSETS,
     family: (text) => app.net?.send({ t: "Family", text }),
@@ -577,6 +625,47 @@ class FieldScreen implements Screen {
 
   leave() { this.input?.remove(); this.input = null; this.menus.leave(); }
 
+  /** 心情图示（lssproto_MA_send）：自己先画（setCharMind），服务端广播给看得到的人；上一个还在播就不送 */
+  sendMind(icon: number) {
+    const s = field?.self;
+    if (!s || battle || modal) return;
+    if (s.mind && !MIND_KEEP.has(s.mind)) {
+      const def = assets.anim(s.mind), act = def?.actions[0];
+      if (act && performance.now() - s.mindAt < act.frames.length * Math.max(1, act.ticks) * (1000 / 60)) return;
+    }
+    s.mind = icon; s.mindAt = performance.now();
+    app.net?.send({ t: "Mind", icon });
+  }
+
+  /** Tab / 频道钮：附近 → 队伍（组队时）→ 家族（有家族时）→ 世界（开关开着）→ 星球（开关开着）→ 附近（chat.cpp KeyboardTab） */
+  private cycleChannel() {
+    const inFamily = (familyStatus?.index ?? 0) > 0;
+    const order = (["near", "party", "family", "world", "allserv"] as const).filter((c) => c !== "party" || partyActive()).filter((c) => c !== "family" || inFamily)
+      .filter((c) => c !== "world" || (etcFlag & ETC.WORLD) !== 0).filter((c) => c !== "allserv" || (etcFlag & ETC.ALL_SERV) !== 0);
+    this.channel = order[(order.indexOf(this.channel) + 1) % order.length] ?? "near";
+  }
+
+  /** 打开画面下方的聊天输入行，text 是预先填进去的字（密语的 "/tell 名字 "） */
+  private openChatInput(text = "") {
+    this.input = new InputBox(canvas, 70, 554, 600, 16, { maxLength: 120 });
+    this.input.el.style.color = FONT_PAL[settings.chatColor];
+    if (text) this.input.el.value = text;
+    let histNo = -1; // chat.cpp：↑↓ 翻输入历史（64 条），↓ 到底清空
+    this.input.el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.stopPropagation(); this.sendChat(); }
+      if (e.key === "Escape") { e.stopPropagation(); this.input?.remove(); this.input = null; }
+      if (e.key === "Tab") { e.preventDefault(); e.stopPropagation(); this.cycleChannel(); }
+      if ((e.key === "ArrowUp" || e.key === "ArrowDown") && chatHistory.length && this.input) {
+        e.preventDefault(); e.stopPropagation();
+        if (e.key === "ArrowUp") histNo = histNo < 0 ? chatHistory.length - 1 : Math.max(0, histNo - 1);
+        else if (histNo < 0 || histNo >= chatHistory.length - 1) { histNo = -1; this.input.el.value = ""; return; }
+        else histNo++;
+        this.input.el.value = chatHistory[histNo];
+      }
+    });
+    setTimeout(() => this.input?.focus(), 0);
+  }
+
   showDuelResult(delta: number, dp: number) { this.menus.showDuelResult(delta, dp); }
   showResult(m: S2CBattleEnd) {
     // 结果窗口列出出战与待命的宠物（menu.cpp：pc.selectPetNo[i]），没有拿到经验的写 +0
@@ -591,7 +680,7 @@ class FieldScreen implements Screen {
 
   setPets(m: S2CPets) { this.menus.setPets(m); }
   setGmMenu(items: GmItem[]) { this.menus.gm.setMenu(items); }
-  setQuests(q: QuestEntry[]) { this.menus.quests.set(q); }
+  setQuests(q: QuestEntry[]) { this.menus.quests.set(q, questAvail); }
   gmReply(text: string) { this.menus.gm.reply(text); }
   gmList(kind: string, entries: GmEntry[]) { this.menus.gm.setList(kind, entries); }
   gmDetail(m: S2CGmDetail) { this.menus.gm.setDetail(m); }
@@ -601,11 +690,34 @@ class FieldScreen implements Screen {
     this.menus.mail.load(selfStatus?.name ?? ""); if (addressBook.length) this.menus.mail.setBook(addressBook);
     if (familyStatus) this.menus.family.status = familyStatus;
     this.menus.gm.setMenu(gmItems);
-    this.menus.quests.load(selfStatus?.name ?? ""); this.menus.quests.set(questLog);
+    this.menus.quests.load(selfStatus?.name ?? ""); this.menus.quests.set(questLog, questAvail);
   }
 
   /** 开着的窗口数（开窗口 SE 202、关窗口 203 用） */
-  openCount() { return this.menus.openCount() + (this.panel.etcOpen ? 1 : 0); }
+  openCount() { return this.menus.openCount() + (this.panel.etcOpen ? 1 : 0) + (this.chatWnd ? 1 : 0); }
+
+  private chatWnd = false; private chatWndScroll = 0; // 完整聊天记录窗口：往前翻了几行
+  /** 完整的聊天记录：(60, 40)..(740, 530) 的半透明窗口，最近 200 行，滚轮或右边的 ▲▼ 翻，Esc 或 ✕ 关 */
+  private chatWindow() {
+    const x1 = 60, y1 = 40, x2 = 740, y2 = 530, rows = 26, lh = 17;
+    this.menus.rects.push([x1, y1, x2, y2]);
+    ui.box(x1, y1, x2, y2, "rgba(0,0,0,0.82)", true);
+    ui.box(x1, y1, x2, y2, "#c8a060", false);
+    ui.hitBox(x1, y1, x2, y2, "chatwnd-bg", false); // 挡住下面的点击
+    ui.text(x1 + 12, y1 + 8, `聊天记录（${chatLog.length} 行）`, FONT.YELLOW);
+    if (ui.textButton(x2 - 24, y1 + 8, "✕", FONT.WHITE, "chatwnd-close")) { this.chatWnd = false; return; }
+    const max = Math.max(0, chatLog.length - rows);
+    if (ui.textButton(x2 - 24, y1 + 40, "▲", FONT.WHITE, "chatwnd-up")) this.chatWndScroll += rows - 1;
+    if (ui.textButton(x2 - 24, y2 - 30, "▼", FONT.WHITE, "chatwnd-down")) this.chatWndScroll -= rows - 1;
+    this.chatWndScroll = Math.max(0, Math.min(max, this.chatWndScroll - wheel * 3));
+    const end = chatLog.length - this.chatWndScroll, shown = chatLog.slice(Math.max(0, end - rows), end);
+    shown.forEach((l, i) => ui.text(x1 + 12, y1 + 34 + i * lh, l.text, l.color));
+    if (max > 0) { // 卷轴位置
+      const top = y1 + 62, bottom = y2 - 38, h = Math.max(12, (bottom - top) * rows / chatLog.length);
+      const y = top + (bottom - top - h) * (1 - this.chatWndScroll / max);
+      ui.box(x2 - 20, y, x2 - 14, y + h, "#c8a060", true);
+    }
+  }
 
   private savedBgmTried = false;
   private bgmMarker = -1; // 现在播的背景音乐是哪个记号来的（还看得到它就不换曲）
@@ -632,7 +744,7 @@ class FieldScreen implements Screen {
     if (now - this.seenSavedAt > 5000) { this.seenSavedAt = now; f.saveSeen(); } // 看过的格子每 5 秒存一次
     // Esc 开关系统窗口、Ctrl+S 开关状态窗口（原版 MenuToggleFlag ^= JOY_ESC / JOY_CTRL_S）
     if (!modal && !this.input) {
-      if (keyPressed.has("Escape")) { if (this.menus.ai.open) this.menus.ai.close(); else if (this.menus.mapOpen) this.menus.toggleMap(); else if (!this.menus.gm.open) this.menus.toggleSystem(); }
+      if (keyPressed.has("Escape")) { if (this.chatWnd) this.chatWnd = false; else if (this.menus.ai.open) this.menus.ai.close(); else if (this.menus.mapOpen) this.menus.toggleMap(); else if (!this.menus.gm.open) this.menus.toggleSystem(); }
 
       // PageUp / PageDown：切换自动战斗（gamemain.cpp，不说话）
       if (keyPressed.has("PageUp") || keyPressed.has("PageDown")) this.menus.toggleAuto(false);
@@ -649,17 +761,9 @@ class FieldScreen implements Screen {
       if (keyPressed.has("Ctrl+t") && !partyActive() && !this.menus.trade.open) app.net?.send({ t: "Trade", cmd: "request", slot: 0, amount: 0 });
     }
     // 回车开关聊天输入（原版：聊天输入行在画面下方）
-    if (keyPressed.has("Enter") && !modal) {
-      if (!this.input) {
-        this.input = new InputBox(canvas, 70, 554, 600, 16, { maxLength: 120 });
-        this.input.el.style.color = FONT_PAL[settings.chatColor];
-        this.input.el.addEventListener("keydown", (e) => {
-          if (e.key === "Enter") { e.stopPropagation(); this.sendChat(); }
-          if (e.key === "Escape") { e.stopPropagation(); this.input?.remove(); this.input = null; }
-        });
-        setTimeout(() => this.input?.focus(), 0);
-      }
-    }
+    if (keyPressed.has("Enter") && !modal && !this.input) this.openChatInput();
+    // Ctrl+R：把上次密语的对象填进输入行（原版 chat.cpp 的 JOY_CTRL_R）
+    if (keyPressed.has("Ctrl+r") && !modal && !this.input && lastTell) this.openChatInput(`/tell ${lastTell} `);
     f.locked = this.menus.vendor.open || !!f.self?.vendor; // 摆着摊 / 看着摊位不能走（iOnStreetVendor）
     f.wantDir = this.input || battle ? -1 : keyDir(); // 快速战斗中留在地图画面，但不能走
     this.encountFrame(f, now);
@@ -683,6 +787,7 @@ class FieldScreen implements Screen {
     const hov = f.actorAt(mouse.x, mouse.y);
     if (hov && (hov.kind === "item" || hov.kind === "gold")) ui.bottomLine = hov.name;
     else if (hov && hov.kind === "pet") ui.bottomLine = `${hov.name}  Lv：${hov.level}`;
+    else if (hov && hov.kind === "player") ui.bottomLine = `${hov.family ? `{${hov.family}} ` : ""}${hov.name}  Lv：${hov.level}`; // mouse.cpp _MOUSE_SHOW_INFO_FOR_HEAD：别人看不到 HP / MP
     // 右键：点身边一格有地上的东西时捡起来（pc.cpp getItem → lssproto_PI_send），否则朝那格转身；0.5 秒内不重复发送（FIELD_BTN_PUSH_WAIT）
     const groundAt = (x: number, y: number) => [...f.actors.values()].some((a) => a.x === x && a.y === y && (a.kind === "item" || a.kind === "gold" || a.kind === "pet"));
     if (mouse.rightClicked && grid && f.self && !f.self.moving(now) && f.target === null && now - this.turnAt >= 500
@@ -739,16 +844,25 @@ class FieldScreen implements Screen {
       } else ui.texts.push({ x: l.x, y: l.y - 14, text: l.text, color: l.color, align: "center" });
     }
     // 聊天栏：左下角最近几行（行数在系统 → 聊天设定里调）
-    const lines = settings.chatLines > 0 ? chatLog.slice(-settings.chatLines) : [];
+    const end = chatLog.length - chatScroll, lines = settings.chatLines > 0 && !this.chatWnd ? chatLog.slice(Math.max(0, end - settings.chatLines), end) : []; // 完整记录开着时不画（会叠在一起）
     lines.forEach((l, i) => ui.text(8, 548 - (lines.length - i) * 17, l.text, l.color));
+    // 完整的聊天记录（额外新功能）：翻页钮上面的钮打开，列出最近 200 行
+    if (chatLog.length > 0 && !this.chatWnd && ui.textButton(778, 473, "◆", FONT.YELLOW, "chat-all")) { this.chatWnd = true; this.chatWndScroll = 0; }
+    if (ui.hovered("chat-all")) ui.bottomLine = "打开完整的聊天记录（最近 200 行）。";
+    // 聊天信息上拉 / 下拉 / 恢复（menu.cpp _SA_LIAOTIAN_ 的三个钮在 (785, 505 / 530 / 555)；原版的图 55260.. 不在资源里，用文字）
+    if (settings.chatLines > 0 && chatLog.length > settings.chatLines) {
+      if (ui.textButton(778, 498, "▲", FONT.WHITE, "chat-up") && chatScroll < chatLog.length - settings.chatLines) chatScroll++;
+      if (ui.textButton(778, 523, "▼", FONT.WHITE, "chat-down") && chatScroll > 0) chatScroll--;
+      if (chatScroll > 0 && ui.textButton(778, 548, "●", FONT.YELLOW, "chat-reset")) chatScroll = 0;
+      if (ui.hovered("chat-up")) ui.bottomLine = `聊天信息上拉，当前聊天信息位置 ${chatLog.length - chatScroll}`;
+      if (ui.hovered("chat-down")) ui.bottomLine = `聊天信息下拉，当前聊天信息位置 ${chatLog.length - chatScroll}`;
+      if (ui.hovered("chat-reset")) ui.bottomLine = "聊天信息正常显示";
+    }
     if (this.input) {
       ui.box(4, 550, 680, 574, "rgba(0,0,0,0.55)", true);
       // 频道：附近 → 队伍（组队时，CHAT_MODE）→ 家族（有家族时，TalkMode 3 的 /FM）→ 世界
       const inFamily = (familyStatus?.index ?? 0) > 0;
-      if (ui.textButton(8, 554, { near: "[附近]", party: "[队伍]", family: "[家族]", world: "[世界]" }[this.channel], FONT.YELLOW, "chan")) {
-        const order = (["near", "party", "family", "world"] as const).filter((c) => c !== "party" || partyActive()).filter((c) => c !== "family" || inFamily);
-        this.channel = order[(order.indexOf(this.channel) + 1) % order.length];
-      }
+      if (ui.textButton(8, 554, { near: "[附近]", party: "[队伍]", family: "[家族]", world: "[世界]", allserv: "[星球]" }[this.channel], FONT.YELLOW, "chan")) this.cycleChannel();
       if (this.channel === "party" && !partyActive() || this.channel === "family" && !inFamily) this.channel = "near";
     }
     // 右上角：楼层名与坐标（原版的小地图位置）
@@ -761,6 +875,8 @@ class FieldScreen implements Screen {
     ui.bottomLineY = 558; // 任务栏常驻在 576..600
     this.menus.frame();
     this.panel.frame(this.menus.rects);
+    if (this.chatWnd) this.chatWindow();
+    wheel = 0;
     if (keyPressed.has("Ctrl+q") && !modal && !this.input) this.panel.toggleEtc(); // JOY_CTRL_Q：游戏设定
   }
 
@@ -779,7 +895,10 @@ class FieldScreen implements Screen {
     walking: () => !!field?.self?.moving(performance.now()),
     etc: () => etcFlag,
     setEtc: (flags) => app.net?.send({ t: "SetFlags", flags }),
-    setEtcLocal: (flags) => { etcFlag = flags; },
+    setEtcLocal: (flags) => {
+      if (etcFlag & ETC.SAVE && !(flags & ETC.SAVE) && chatSaved.length) saveChatFile(); // 关掉对话储存：把记下的对话存成文件（原版 chat\\<类型><年月日>.TXT）
+      etcFlag = flags;
+    },
     party: (join) => app.net?.send({ t: "Party", request: join ? 1 : 0 }),
     card: () => app.net?.send({ t: "CardExchange" }),
     trade: () => app.net?.send({ t: "Trade", cmd: "request", slot: 0, amount: 0 }),
@@ -796,7 +915,10 @@ class FieldScreen implements Screen {
 
   private sendChat() {
     const text = this.input?.value.trim();
-    if (text) app.net?.send({ t: "Chat", channel: this.channel, text, color: settings.chatColor, area: settings.voice });
+    if (text) {
+      if (chatHistory[chatHistory.length - 1] !== text && !/^\[.*\]$/.test(text)) { chatHistory.push(text); while (chatHistory.length > 64) chatHistory.shift(); }
+      app.net?.send({ t: "Chat", channel: this.channel, text, color: settings.chatColor, area: settings.voice });
+    }
     this.input?.remove();
     this.input = null;
   }
@@ -805,6 +927,7 @@ class FieldScreen implements Screen {
 // ---------------------------------------------------------------------------
 
 let screen: Screen = { frame() {} };
+let lastTell = ""; // 上次密语我的人（Ctrl+R 回话）
 let frames = 0, fps = 0, fpsAt = performance.now(), workMs = 0;
 let closePendingAt = 0;       // 窗口数减少的时刻（关窗口的声音等 CLOSE_SE_DELAY 再放）
 const CLOSE_SE_DELAY = 250;
@@ -843,8 +966,16 @@ function frame(now: number) {
   workMs = workMs * 0.95 + (performance.now() - workAt) * 0.05; // 每帧 JS 的耗时（平滑）：显示器或浏览器限了帧率时，看它才知道还有多少余裕
   if (now - fpsAt >= 1000) { fps = frames; frames = 0; fpsAt = now; }
   const hud = document.getElementById("hud");
-  if (hud) hud.textContent = params.has("debug") ? `${fps} fps  每帧 ${workMs.toFixed(1)} ms  ${renderer.drawCalls} 次绘制  输出 ${canvas.width}×${canvas.height}  显存 ${assets.pageCount} 页 ${Math.round(assets.gpuBytes / 1048576)} MB  加载中 ${assets.pending}  SA 时 ${saHour(now)}` : "";
+  if (hud) hud.textContent = params.has("debug") ? debugText(now) : "";
   requestAnimationFrame(frame);
+}
+
+/** ?debug 的两行：画面效能；与服务端的往来（最近 2 分钟平均，KB 是压缩前的 JSON 大小，net.ts trafficRates） */
+function debugText(now: number): string {
+  const t = trafficRates();
+  return `${fps} fps  每帧 ${workMs.toFixed(1)} ms  ${renderer.drawCalls} 次绘制  输出 ${canvas.width}×${canvas.height}  显存 ${assets.pageCount} 页 ${Math.round(assets.gpuBytes / 1048576)} MB  加载中 ${assets.pending}  SA 时 ${saHour(now)}
+`
+    + `服务端（近 ${Math.round(t.span)} 秒）  收 ${t.inMsg.toFixed(1)} msg/s ${t.inKB.toFixed(2)} KB/s  送 ${t.outMsg.toFixed(1)} msg/s ${t.outKB.toFixed(2)} KB/s（压缩前）`;
 }
 
 /** 进登录画面前的加载画面：先读资源索引，再把界面用的核心图集页传进显存（画在 2D 覆盖层上，进度 0..1） */

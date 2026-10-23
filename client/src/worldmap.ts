@@ -7,6 +7,8 @@
 //   · 左边列出去过的区域（楼层名，field.ts 存在 localStorage sa.floors.<角色>），点一下看那一层看过的部分
 //     （格子资料向服务端补要，MapReq 不限楼层；看过的格子本来就记在 sa.seen.<角色>.<楼层>）。
 // 平均色的计算：整页图集解码一次、把排队的图都算完就丢掉（整页解码很占记忆体）。
+// 实景（settings.mapArt，预设开）：同一次解码顺便把那张图缩成一半存起来（TileColors.sprite），地图照画面的等角投影把地块与物件的图
+// 缩小画上去（物件按深度排序、盖过地块），和离线渲染的整张地图一样；图还没解码好的格子先用平均色的菱形。
 
 import type { Assets } from "./assets.ts";
 import type { Field, FloorView } from "./field.ts";
@@ -19,6 +21,9 @@ type Rgb = [number, number, number] | null;
 export class TileColors {
   version = 0; // 算出新颜色时加一（地图据此重画）
   private colors = new Map<number, Rgb>();           // null 为全透明，不画
+  private sprites = new Map<number, { c: HTMLCanvasElement; ox: number; oy: number; w: number; h: number }>(); // 缩成一半的图（实景地图用）
+  /** 实景用的图（缩成一半的画布、原尺寸的锚点与宽高）；还没解码好回 undefined（color() 会排进队列） */
+  sprite(mapNumber: number) { return this.sprites.get(mapNumber); }
   private queue = new Map<string, Set<number>>();   // 待算的图，按图集页分组
   private busy = false;
   private palette: ImageData | null = null;
@@ -60,6 +65,8 @@ export class TileColors {
           const idx = n >= 1000000 ? n : this.assets.tile(n)!;
           const e = this.assets.image(idx)!;
           this.colors.set(n, average(data, e.x, e.y, e.w, e.h, set === 0 ? this.palette : null));
+          const c = halfSprite(data, e.x, e.y, e.w, e.h, set === 0 ? this.palette : null);
+          if (c) this.sprites.set(n, { c, ox: e.ox, oy: e.oy, w: e.w, h: e.h });
         }
         this.version++;
       }
@@ -77,6 +84,21 @@ export class TileColors {
     bmp.close();
     return g.getImageData(0, 0, c.width, c.height);
   }
+}
+
+/** 把图集页上的一张图缩成一半（取 2×2 的左上那个像素，像素画不糊）画进一张画布；8 位图查 0 号调色板 */
+function halfSprite(page: ImageData, x0: number, y0: number, w: number, h: number, pal: ImageData | null): HTMLCanvasElement | null {
+  const hw = Math.max(1, Math.ceil(w / 2)), hh = Math.max(1, Math.ceil(h / 2));
+  const c = document.createElement("canvas"); c.width = hw; c.height = hh;
+  const g = c.getContext("2d"); if (!g) return null;
+  const img = g.createImageData(hw, hh);
+  for (let y = 0; y < hh; y++) for (let x = 0; x < hw; x++) {
+    const s = ((y0 + y * 2) * page.width + x0 + x * 2) * 4, d = (y * hw + x) * 4;
+    if (pal) { const k = page.data[s]; if (!k) continue; img.data[d] = pal.data[k * 4]; img.data[d + 1] = pal.data[k * 4 + 1]; img.data[d + 2] = pal.data[k * 4 + 2]; img.data[d + 3] = 255; }
+    else { img.data[d] = page.data[s]; img.data[d + 1] = page.data[s + 1]; img.data[d + 2] = page.data[s + 2]; img.data[d + 3] = page.data[s + 3]; }
+  }
+  g.putImageData(img, 0, 0);
+  return c;
 }
 
 /** getAutoMapColor：不透明像素的平均色。8 位图的灰度值是调色板下标（0 透明），查 0 号调色板 */
@@ -180,6 +202,8 @@ export class MapWindow {
     if (tool("全图", "map-fit") && view) this.fit(view);
     if (tool("回到自己", "map-me", this.follow && current)) { this.floor = -1; this.follow = true; }
     if (tool("小地图", "map-mini", settings.minimap)) { settings.minimap = !settings.minimap; saveSettings(); }
+    if (tool("实景", "map-art", settings.mapArt)) { settings.mapArt = !settings.mapArt; saveSettings(); this.drawn = ""; this.drawnMini = ""; }
+    if (ui.hovered("map-art")) ui.bottomLine = "用地块与建筑的图画地图（关掉就是色块）。";
     if (ui.hovered("map-mini")) ui.bottomLine = "在画面右上角常显一张跟着自己的小地图。";
     if (ui.hovered("map-fit")) ui.bottomLine = "按看过的范围缩放到整张图。";
     if (ui.hovered("map-me")) ui.bottomLine = "回到自己所在的区域，跟着自己移动；拖动地图就不跟了。";
@@ -295,7 +319,7 @@ export class MapWindow {
 
   /** 底图：看过的格子（地块 + 物件）与传送点；视野、资料、颜色没变就不重画 */
   private render(view: FloorView, f: Field) {
-    const key = `${view.floor},${Math.round(this.cx * 4)},${Math.round(this.cy * 4)},${this.zoom},${view.version},${view.seenVersion},${this.colors.version}`;
+    const key = `${view.floor},${Math.round(this.cx * 4)},${Math.round(this.cy * 4)},${this.zoom},${view.version},${view.seenVersion},${this.colors.version},${settings.mapArt}`;
     if (key === this.drawn) return;
     this.drawn = key;
     this.paint(this.base.getContext("2d")!, view, f, this.cx, this.cy, ZOOMS[this.zoom], MAP_W, MAP_H);
@@ -308,7 +332,7 @@ export class MapWindow {
     if (!f || !me || f.floor < 0) return;
     const view = f.floorView(f.floor);
     if (!view) return;
-    const key = `${view.floor},${me.x},${me.y},${view.version},${view.seenVersion},${this.colors.version}`;
+    const key = `${view.floor},${me.x},${me.y},${view.version},${view.seenVersion},${this.colors.version},${settings.mapArt}`;
     if (key !== this.drawnMini) { this.drawnMini = key; this.paint(this.mini.getContext("2d")!, view, f, me.x, me.y, ZOOMS[MINI_ZOOM], MINI_W, MINI_H); }
     ui.pic(this.mini, x, y);
     ui.box(x - 1, y - 1, x + MINI_W + 1, y + MINI_H + 1, "rgba(255,255,255,0.35)", false);
@@ -348,6 +372,15 @@ export class MapWindow {
       ctx.moveTo(px - s - 0.5, py); ctx.lineTo(px, py - hy - 0.5); ctx.lineTo(px + s + 0.5, py); ctx.lineTo(px, py + hy + 0.5);
       ctx.closePath(); ctx.fill();
     };
+    const art = settings.mapArt, k32 = s / 32; // 实景：图按 一格半宽 / 32 缩放（画面一格半宽 32 像素）
+    ctx.imageSmoothingEnabled = s < 8; // 缩得很小时平滑一点，免得一堆杂点
+    const sprite = (n: number, px: number, py: number) => {
+      const sp = this.colors.sprite(n);
+      if (!sp) { this.colors.color(n); return false; }
+      ctx.drawImage(sp.c, px + sp.ox * k32, py + sp.oy * k32, sp.w * k32, sp.h * k32);
+      return true;
+    };
+    const artObjs: [number, number, number, number][] = []; // 深度, px, py, 物件图号
     const warps: [number, number][] = [];
     const objs: [number, number, [number, number, number], number][] = []; // px, py, 颜色, 物件图号
     for (let y = y1; y <= y2; y++) {
@@ -356,15 +389,29 @@ export class MapWindow {
         if (!view.seen[k] || !view.walk[k]) continue;
         const [px, py] = toPx(x, y);
         if (!inView(px, py)) continue;
+        if (art && view.tiles[k] > 99 && sprite(view.tiles[k], px, py)) {
+          const o = view.objs[k];
+          if (o > 99) artObjs.push([py, px, py, o]);
+          if (view.walk[k] === 3) warps.push([px, py]);
+          continue;
+        }
         const c = this.colors.color(view.tiles[k]);
         if (c) cell(px, py, c);
         const o = view.objs[k];
+        if (art && o > 99) { artObjs.push([py, px, py, o]); if (view.walk[k] === 3) warps.push([px, py]); continue; }
         if (o > 99) {
           const oc = this.colors.color(o);
           if (oc) objs.push([x, y, oc, o]);
         }
         if (view.walk[k] === 3) warps.push([px, py]);
       }
+    }
+    // 实景的物件：按深度（画面 y）由后往前画，盖在地块上；图还没好的先用平均色铺占地
+    artObjs.sort((a, b) => a[0] - b[0]);
+    for (const [, px, py, o] of artObjs) {
+      if (sprite(o, px, py)) continue;
+      const c = this.colors.color(o);
+      if (c) cell(px, py, c);
     }
     for (const [x, y, c, o] of objs) { // 物件照占地往 +x、−y 铺开，压在地块上（createAutoMap 的第二趟）
       const [tx, ty] = this.host.assets.footprint(o);
@@ -377,7 +424,7 @@ export class MapWindow {
     if (warps.length) { // 传送点：亮青色加一圈光
       ctx.save();
       ctx.shadowColor = "#4cf0ff"; ctx.shadowBlur = Math.max(4, s);
-      ctx.fillStyle = "#7af6ff";
+      ctx.fillStyle = art ? "rgba(122,246,255,0.45)" : "#7af6ff";
       for (const [px, py] of warps) {
         ctx.beginPath();
         ctx.moveTo(px - s, py); ctx.lineTo(px, py - hy); ctx.lineTo(px + s, py); ctx.lineTo(px, py + hy); ctx.closePath(); ctx.fill();
@@ -386,7 +433,7 @@ export class MapWindow {
     }
     // 四周暗角
     const g = ctx.createRadialGradient(MAP_W / 2, MAP_H / 2, Math.min(MAP_W, MAP_H) * 0.45, MAP_W / 2, MAP_H / 2, Math.max(MAP_W, MAP_H) * 0.75);
-    g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,0.55)");
+    g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, art ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.55)"); // 实景的图本来就有明暗，暗角淡一点
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, MAP_W, MAP_H);
   }

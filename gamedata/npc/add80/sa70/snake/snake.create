@@ -26,18 +26,6 @@ enemy=changeevent|file:add80/sa70/snake/snake_1
 }
 
 {
-floorid=5106
-borncorner=28,4,28,4
-time=0
-createnum=1
-graphicname=16121
-name=√‹µ¿ ÿŒ¿
-dir=6
-ignoreinvincible=1
-enemy=npcgen_warpman|file:add80/sa70/snake/snake_2
-}
-
-{
 floorid=9357
 borncorner=22,4,22,4
 time=0

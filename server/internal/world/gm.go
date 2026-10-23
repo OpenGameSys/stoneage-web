@@ -380,7 +380,7 @@ func (w *World) gmCommand(e *entity, text string) bool {
 			return usage()
 		}
 		c.Level = n
-		c.Exp = max(0, w.game.Battle.NextLevelExp(n-1)) // 经验改成这一级的起点
+		c.Exp = 0 // 经验按级累计，改成这一级的起点
 		changed()
 		reply("等级设为 %d", n)
 	case "/exp":
@@ -389,7 +389,7 @@ func (w *World) gmCommand(e *entity, text string) bool {
 			return usage()
 		}
 		from := c.Level
-		ups := w.gainExp(c, n)
+		ups := w.gainExp(e, n)
 		changed()
 		if ups > 0 {
 			reply("得到经验 %d，从 %d 级升到 %d 级", n, from, c.Level)
@@ -541,7 +541,10 @@ func (w *World) gmCommand(e *entity, text string) bool {
 		case lv <= p.Level:
 			reply("%s 已经 %d 级了（只能往上升）", p.displayName(), p.Level)
 		default:
-			ups := w.petGainExp(p, max(0, w.game.Battle.NextLevelExp(lv-1)-p.Exp))
+			ups := 0
+			for p.Level < lv && w.game.Battle.NextLevelExp(p.Level) > 0 {
+				ups += w.petGainExp(e, p, max(0, w.game.Battle.NextLevelExp(p.Level)-p.Exp))
+			}
 			w.petsChanged(e)
 			reply("%s 升了 %d 级，现在 %d 级", p.displayName(), ups, p.Level)
 		}

@@ -165,6 +165,7 @@ type Families struct {
 	manors  [len(manorTable)]manorState
 	fmsMemo []string           // 家族之间留言板
 	online  map[int64]*World   // 在线的角色 → 所在的线路
+	worlds  []*World           // 共用这份家族资料的所有线路（星球频道等跨线路广播用）
 	change  map[int64]int64    // 族长让位：被问的人 → 族长（CHAR_WORKLEADERCHANGE）
 	saves   chan func()
 	ranking []*family          // 综合声望排行（按 total 由高到低），famRank 时重排
@@ -279,6 +280,17 @@ func (f *Families) tell(id int64, fn func(w *World, e *entity)) {
 			fn(w, e)
 		}
 	})
+}
+
+// each 把 fn 送到每条线路的协程里执行（星球频道这类跨线路广播）。
+func (f *Families) each(fn func(w *World)) {
+	f.mu.Lock()
+	ws := append([]*World(nil), f.worlds...)
+	f.mu.Unlock()
+	for _, w := range ws {
+		w := w
+		w.post(func() { fn(w) })
+	}
 }
 
 // say 是 AC 送给族人的公告（ACFMAnnounce kind 3 等，红字）；msg 不在线的人收不到。

@@ -84,7 +84,7 @@ func (w *World) startWatch(e *entity, room *battleRoom) {
 	e.window = nil
 	e.watch = room
 	room.watchers = append(room.watchers, e)
-	msg := &proto.BattleStart{Field: room.field, MySlot: -1, TurnTime: 0, Pvp: room.pvp, Event: room.npc != nil, Watch: true}
+	msg := &proto.BattleStart{Field: room.field, MySlot: -1, TurnTime: 0, Pvp: room.pvp, Event: room.npc != nil, Watch: true, Speed: w.battleSpeedPct()}
 	for _, f := range room.b.F {
 		if f != nil {
 			msg.Fighters = append(msg.Fighters, w.fighterInfo(room, f))

@@ -121,6 +121,7 @@ func (b *Battle) setup(f *Fighter, c Command) Command {
 		case "PETSKILL_EarthRound":
 			c.Kind = Hide
 			f.earthP, _ = optNum(s.Option, "攻%")
+			f.earthT, f.earthN = c.Target, s.Name
 		case "ENEMYSKILL_ReHP":
 			c.Kind = Heal
 		case "ENEMYSKILL_ReLife":
@@ -161,8 +162,16 @@ func (b *Battle) skillAttack(f *Fighter, c Command, ev *[]Event) {
 	s := c.Skill
 	if s == nil {
 		o := attackOpts{hits: b.playerHits(f)}
-		if f.Weapon == data.ItemFist && o.hits > 1 {
-			o.div = float64(o.hits) // 拳套类武器连击时伤害平分（gDamageDiv）
+		switch f.Weapon {
+		case data.ItemFist:
+			if o.hits > 1 {
+				o.div = float64(o.hits) // 拳套类武器连击时伤害平分（gDamageDiv）
+			}
+		case data.ItemBreakThrow:
+			o.status, o.turns = StParalysis, 0 // 碎石器打中附加麻痹 1 回合（BATTLE_CommandExec：gBattleStausChange = BATTLE_ST_PARALYSIS）
+		case data.ItemBoomerang:
+			b.boomerang(f, c.Target, ev)
+			return
 		}
 		b.attackSeq(f, c.Target, o, ev)
 		return
@@ -171,6 +180,10 @@ func (b *Battle) skillAttack(f *Fighter, c Command, ev *[]Event) {
 		return
 	}
 	o := attackOpts{name: s.Name}
+	switch s.Func {
+	case "PETSKILL_PowerBalance", "PETSKILL_WildViolentAttack", "PETSKILL_Mighty", "PETSKILL_GuardBreak", "PETSKILL_GuardBreak2":
+		statEvents(f, s.Option, ev) // 背水之战等：先提示攻 / 防 / 敏的变化
+	}
 	switch s.Func {
 	case "PETSKILL_ContinuationAttack":
 		n := leadNum(s.Option)
@@ -215,6 +228,66 @@ func (b *Battle) skillAttack(f *Fighter, c Command, ev *[]Event) {
 
 // playerHits 是 BATTLE_GetAttackCount 与 battle.c 的 attack_max：装备武器时攻击次数在武器的 [最小, 最大] 之间；
 // 空手时 10 级以上的玩家按运气连击：RAND(1,1000) ≤ 10+运气×5 时 5..10 下，≤ 30+运气×5 时 3 下，≤ 70+运气×5 时 2 下，否则 1 下。
+// shootKind 是远程武器的演出种类（送给客户端的 Event.Shoot）：弓 1、投掷斧 2、碎石器 3、回力镖 4，其余 0。
+func shootKind(weapon int) int {
+	switch weapon {
+	case data.ItemBow:
+		return 1
+	case data.ItemBoundThrow:
+		return 2
+	case data.ItemBreakThrow:
+		return 3
+	case data.ItemBoomerang:
+		return 4
+	}
+	return 0
+}
+
+// boomerangOrder 是 battle.c 的 BoomerangVsTbl：回力镖飞过一排的顺序（排内 4、2、0、1、3 号位）。
+var boomerangOrder = [5]int{4, 2, 0, 1, 3}
+
+// boomerang 是 BATTLE_COM_BOOMERANG：拿着回力镖普通攻击时打对方一整排，每人伤害 ×0.3（gBattleDamageModyfy）；
+// 目标那一排（目标不在就按预设目标）不能是自己那一排；排内按 BoomerangVsTbl 的顺序、敌方（side 1）倒着飞；
+// 投掷类武器不反击也不被反击（counterCheck）。同一次的几下标成 Combo，客户端合成一次飞行。
+func (b *Battle) boomerang(a *Fighter, target int, ev *[]Event) {
+	none := func() {
+		*ev = append(*ev, Event{Actor: a.Slot, Kind: None, Target: -1, HP: a.HP, Status: a.Status(), Guardian: -1})
+	}
+	t := b.pickTarget(a, target)
+	if t == nil {
+		none()
+		return
+	}
+	row := t.Slot / 5
+	if row == a.Slot/5 {
+		none()
+		return
+	}
+	first := len(*ev)
+	for k := 0; k < 5; k++ {
+		i := k
+		if a.Side() == 1 {
+			i = 4 - k
+		}
+		d := b.F[row*5+boomerangOrder[i]]
+		if !d.Alive() || d.hidden {
+			continue
+		}
+		e, _ := b.attackOnce(a, d, attackOpts{dmgMod: 0.3, noCounter: true}, false)
+		*ev = append(*ev, e)
+		if over, _ := b.Over(); over || !a.Alive() {
+			break
+		}
+	}
+	if len(*ev) == first {
+		none()
+		return
+	}
+	for i := first; i < len(*ev)-1; i++ {
+		(*ev)[i].Combo = true
+	}
+}
+
 func (b *Battle) playerHits(f *Fighter) int {
 	if f.Weapon >= 0 && f.AttackMax > 0 {
 		return max(1, b.randi(max(1, f.AttackMin), f.AttackMax))

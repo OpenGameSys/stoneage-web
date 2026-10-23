@@ -126,6 +126,10 @@ type Fighter struct {
 	AttackMin, AttackMax int
 
 	Escaped bool
+	// Flown：被击飞（BENT_FLG_ULTIMATE，battle_event.c BATTLE_DamageSub）：一下伤害 ≥ 最大 HP × 1.2 + 20，或这场累计的伤害（ultimate）到了，
+	// 算倒下而且直接离开战斗（世界层 flownHome / afterTurn）；雷尔（101813 / 101814）不会被击飞
+	Flown    bool
+	ultimate int
 
 	FixAtk, FixDef, FixQuick int // 不含临时加成的工作值（WORKFIXSTR / FIXTOUGH / FIXDEX）
 	fixed                    bool
@@ -139,7 +143,9 @@ type Fighter struct {
 	charge  int // 蓄力剩余回合；-1 表示没在蓄力
 	chargeP int // 蓄力完成后的攻击力加成 %
 	hidden  bool
-	earthP  int // 地球一周：下回合的伤害加成 %
+	earthP  int    // 地球一周：下回合的伤害加成 %
+	earthT  int    // 地球一周：钻地时选的目标（原版 CHAR_WORKBATTLECOM2，下回合 BATTLE_TargetAdjust 打它，倒了才另选）
+	earthN  string // 地球一周：技能名（钻出来那一下照样显示）
 	// CaptureUp 是捕获机率的加成（ITEM_useCaptureUp，WORKMODCAPTURE），捕捉一次后归零
 	CaptureUp int
 	// TempNo 是宠物的模板编号（CHAR_PETID，鞭炮用；敌人的在 Seed 里）；Pig 是乌力化剩下的秒数（玩家，世界层带进带出）；
@@ -229,7 +235,9 @@ const (
 	// PetOut 叫出新的宠物到 Target（事件带着它的名字、图、等级、HP），新宠物这回合不行动
 	PetSwap Kind = "pet" // 玩家的指令
 	PetIn   Kind = "petin"
-	PetOut  Kind = "petout"
+	// StatChange 是能力变化的提示（原版 BD|…|d1 3..6 → "攻 上升N％"）：Stat 37 回避 38 攻 39 防 40 敏，StatVal 是百分比（负数下降）
+	StatChange Kind = "stat"
+	PetOut     Kind = "petout"
 )
 
 type Command struct {
@@ -290,6 +298,14 @@ type Event struct {
 	// 咒术：目标身上的效果动画、施法者剩下的 MP
 	Effect  int
 	ActorMP int
+	// 远程武器的演出（原版 BB|w0..2 与 BO）：0 近战、1 弓（射箭）、2 投掷斧、3 碎石器、4 回力镖（打一整排，一次飞过去）
+	Shoot int
+	// Fly：这一下把目标击飞了（BENT_FLG_ULTIMATE）：1 累计伤害到了（ATT_AKO1）、2 一下就到（ATT_AKO2）；目标同时 Dead
+	Fly int
+	// Icon：攻击者头上的技能图示（oft.cpp 6448-6530 set_damage_num 编号）：1 破除防御、2 E啮齿、3..6 强化攻击（地水火风）、7..10 属性转换、11 狂狮怒吼、12 爆裂 / 自爆
+	Icon int
+	// 能力变化（Kind StatChange）
+	Stat, StatVal int
 	// 道具用掉了（item.go，不送给客户端）：Consume 一个、ConsumeAll 整叠
 	Consume, ConsumeAll bool `json:"-"`
 	// 攻击魔法放动画的位置（attmagic.bin）："攻击方式|时间差|显示方式|x|y"
@@ -306,6 +322,9 @@ type Battle struct {
 	F    [Slots]*Fighter
 	Turn int
 	Rnd  *rand.Rand
+	// GuardScale 是敌人选"防御"的权重倍率（rules.enemyGuardRate；0 当作 1 = 原版），NoEnemyGuard 为真时敌人完全不防御
+	GuardScale   float64
+	NoEnemyGuard bool
 	// PvP 是玩家对玩家（BATTLE_TYPE_P_vs_P）：逃跑一定成功、复活不能用在玩家身上、可以回复对方与对自己人附加状态、爆裂攻击生效
 	PvP bool
 	// CanCapture 是捕获前世界层的检查（BATTLE_CaptureItemCheck 的必要道具、宠物栏有空位），nil 为都可以
@@ -599,7 +618,7 @@ func (b *Battle) act(f *Fighter, c Command, ev *[]Event) {
 		return
 	case f.hidden:
 		f.hidden = false
-		b.attackSeq(f, c.Target, attackOpts{name: name, dmgMod: 1 + 0.01*float64(f.earthP)}, ev)
+		b.attackSeq(f, f.earthT, attackOpts{name: f.earthN, dmgMod: 1 + 0.01*float64(f.earthP)}, ev)
 		return
 	}
 	switch c.Kind {
@@ -674,6 +693,36 @@ type attackOpts struct {
 	lightTake  string  // 穿透术 / 破镜重圆：对方的光镜守正好是这一种时，自己也得到一次
 	noBarrier  bool    // 火线猎杀：不看光镜守（BATTLE_DamageSub_FIREKILL）
 	explode    bool    // 爆裂攻击（PvP）
+	tooth      bool    // E啮齿术（客户端画 SPR_tooth）
+	roar       bool    // 狂狮怒吼（客户端画 CG_ICON_ROAR）
+}
+
+// icon 是攻击者头上要画的技能图示（Event.Icon）。
+func (o attackOpts) icon() int {
+	switch {
+	case o.gbreak > 0:
+		return 1
+	case o.tooth:
+		return 2
+	case o.modifyElem > 0:
+		return 2 + o.modifyElem
+	case o.mdfyElem > 0:
+		return 6 + o.mdfyElem
+	case o.roar:
+		return 11
+	case o.explode:
+		return 12
+	}
+	return 0
+}
+
+// statEvents 把技能参数里的 攻% / 防% / 敏% 变成能力变化的提示事件（原版 BD|…|4..6）。
+func statEvents(f *Fighter, opt string, ev *[]Event) {
+	for i, key := range []string{"攻%", "防%", "敏%"} {
+		if v, ok := optNum(opt, key); ok && v != 0 {
+			*ev = append(*ev, Event{Actor: f.Slot, Kind: StatChange, Target: f.Slot, Guardian: -1, HP: f.HP, Status: f.Status(), Stat: 38 + i, StatVal: v})
+		}
+	}
 }
 
 // attackSeq 是一次完整的攻击：可能连击几下，之后双方轮流反击。
@@ -745,6 +794,9 @@ func (b *Battle) attackOnce(a, d *Fighter, o attackOpts, isCounter bool) (Event,
 	e := Event{Actor: a.Slot, Kind: Attack, Target: d.Slot, Guardian: -1, Skill: o.name}
 	if isCounter {
 		e.Kind = Counter
+	} else {
+		e.Shoot = shootKind(a.Weapon)
+		e.Icon = o.icon()
 	}
 	cont := true
 	if d.Pet && d.Slot-5 == a.Slot {
@@ -891,6 +943,7 @@ func (b *Battle) attackOnce(a, d *Fighter, o attackOpts, isCounter bool) (Event,
 			d.Ride.Fell, e.Fall = true, true
 		}
 	}
+	full := dmg // 分给骑宠之前的整下伤害（击飞的判定用它）
 	if dmg > 0 && !explode {
 		e.PetDamage, e.Fall = d.rideSplit(&dmg)
 	}
@@ -902,6 +955,21 @@ func (b *Battle) attackOnce(a, d *Fighter, o attackOpts, isCounter bool) (Event,
 	if d.HP <= 0 {
 		d.HP, e.Dead, cont = 0, true, false
 		d.KilledBy, d.KilledRide = a.Slot, a.riding()
+	}
+	// 击飞（BATTLE_DamageSub 的 IsUltimate / BENT_FLG_ULTIMATE）：一下 ≥ 最大 HP × 1.2 + 20 直接击飞（2）；
+	// 否则累计这场挨的伤害（CHAR_WORKULTIMATE），到了也击飞（1）。雷尔不会被击飞（_PETSKILL_LER）。
+	if full > 0 && d.Sprite != 101813 && d.Sprite != 101814 {
+		thr := int(float64(d.MaxHP)*1.2 + 20)
+		if full >= thr {
+			e.Fly = 2
+		} else if d.ultimate += dmg; d.ultimate >= thr {
+			e.Fly = 1
+		}
+		if e.Fly > 0 {
+			d.ultimate = 0
+			d.HP, d.Flown, e.Dead, cont = 0, true, true, false
+			d.KilledBy, d.KilledRide = a.Slot, a.riding()
+		}
 	}
 	if dmg > 0 && o.status > 0 && d.HP > 0 && b.statusCheck(a, d, o.status) {
 		d.status[o.status] = o.turns + 1
@@ -1269,6 +1337,12 @@ func tactic(opt, key string, n int) []int {
 func (b *Battle) enemyAI(f *Fighter) Command {
 	at := tactic(f.Tactics, "at", 3)
 	gu := tactic(f.Tactics, "gu", 1)
+	switch {
+	case b.NoEnemyGuard:
+		gu[0] = 0
+	case b.GuardScale > 0 && b.GuardScale != 1:
+		gu[0] = int(math.Round(float64(gu[0]) * b.GuardScale))
+	}
 	ma := tactic(f.Tactics, "ma", 1)
 	es := tactic(f.Tactics, "es", 1)
 	wa := tactic(f.Tactics, "wa", 7)

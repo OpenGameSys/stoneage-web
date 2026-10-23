@@ -2,17 +2,6 @@ NPCCREATE
 #### 从 serv/data-8.0/npc/sa70/treasure/treasure.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
 
 {
-name=凯拉斯
-floorid=1000
-borncenter=31,69
-dir=4
-ignoreinvincible=1
-createnum=1
-graphicname=16102
-enemy=changeevent|file:add80/sa70/treasure/treasure1.arg
-}
-
-{
 name=宝箱
 floorid=817
 borncenter=148,26

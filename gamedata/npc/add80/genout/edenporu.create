@@ -56,15 +56,6 @@ enemy=npcgen_warp|5578|32|18
 }
 
 {
-floorid=5540
-borncorner=599,469,599,469
-time=0
-ignoreinvincible=1
-createnum=1
-enemy=npcgen_warp|5570|0|55
-}
-
-{
 floorid=5570
 borncorner=0,55,0,55
 time=0

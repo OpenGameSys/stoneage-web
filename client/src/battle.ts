@@ -71,6 +71,18 @@ function damageSe(marker: number): number {
   return ({ 10000: 250, 10001: 254, 10002: 251, 10003: 251, 10004: 252, 10005: 0, 10006: 0, 10007: 254 } as Record<number, number>)[m] ?? 250;
 }
 const FRAME = 1000 / 60;
+/**
+ * 战斗演出的速度倍数（额外新功能，rules.battleSpeed，和地图上的 walkSpeed 分开），BattleStart.speed 是它的百分比：
+ * 走动（moveStep、walkStep）、走路与攻击等动作的动画（Fighter.frame）都按它加速；站立、倒地的循环动画照常速。
+ */
+let speedMul = 1;
+const battleSpeed = () => speedMul;
+/** 远程武器的飞行物（anim_tbl.h）：箭 CG_ARROW_00..15 按 32 方向的 crs/2 选图、影子 +20；碎石器 25785 / 影子 25786；投掷斧 SPR_ono / SPR_onokage。
+ *  回力镖 SPR_boomerang 100502 在这套（和 8.0 的）客户端资源里都没有，照原版代码里留的备选改用投掷斧的图。 */
+/** 光 / 镜 / 守挨打的记号（set_guard_mark）、攻击者头上的技能图示（set_damage_num 的图示型）、倒地的星星、属性反转、战场属性 */
+const FX = { MIRROR: 100650, BARRIER: 100651, ABSORB: 100652, STAR: 100501, REVERSE: 100556, FIELD: 100600, ATR_ICON: 25131 };
+const SKILL_ICON: Record<number, number> = { 1: 26514, 2: 101415, 3: 101403, 4: 101404, 5: 101402, 6: 101405, 7: 101408, 8: 101409, 9: 101407, 10: 101410, 11: 25869, 12: 101418 };
+const MISSILE = { ARROW: 25630, STONE: 25785, STONE_SHADOW: 25786, AXE: 100504, AXE_SHADOW: 100505, BOOMERANG: 100502, SPEED: 32 };
 const ANGRY = 8; // loadsprbin.h ANIM_ANGRY
 
 // PETSKILL_TARGET_*（pet_skill.h）与 PETSKILL_FIELD_MAP
@@ -94,10 +106,29 @@ class Fighter {
   rideHp: number;           // 骑着的宠物的 HP（没骑为 0；落马后为 0）
   status = 0;
   dead = false; gone = false; hidden = false;
+  fly: [number, number] | null = null; // 被击飞：每毫秒的位移，飞出画面就 gone（oft.cpp case 55）
+  shakeUntil = 0;        // 挨打后原地抖动到几时（hit stop：普通 8 帧、会心 / 反射 32 帧）
+  motion: { phase: "back" | "wait" | "return"; from: [number, number]; to: [number, number]; at: number; ms: number } | null = null; // 击退 → 停 → 走回原位
+  dying = false;         // 走回原位后才倒下（VCT_NO_DIE）
+  deadAt = 0;            // 倒地动画开始的时刻（播完放星星与 SE 6）
+  stars = false;         // 倒地后头上绕着星星（set_piyo_loop）
+  reversed = false;      // 属性反转中（BR，头上 SPR_zokusei）
   private action = ANIM.STAND; private loop = true; private actAt = 0;
   private onHit: (() => void) | null = null; private hitDone = false;
   private lastFrame = -1;
+  private lastAct: AnimAction | null = null; // lastFrame 是哪个动作的
   hitMarker = 10000; // 这次攻击动画的命中帧记号（ATR_HIT，挨打的声音按它选）
+  private pauseAt = 0; private pauseMs = 0; // hit stop：攻击动画在命中帧定住几帧（oft.cpp case 2 的 ATR_HIT_STOP）
+  /** 动画在 now 这一刻定住 ms 毫秒，之后从定住的那一格接着播 */
+  freeze(now: number, ms: number) { this.pauseAt = now; this.pauseMs = ms; }
+  walkFast = false; // 走过去时走路动画两倍速
+  /** 不循环的动作已经播完、回到站立（或本来就在站立 / 循环的动作） */
+  idle(assets: Assets, now: number): boolean {
+    if (this.loop || this.action === ANIM.STAND) return true;
+    const def = assets.anim(this.f.sprite), act = def && findAction(def, this.dir, this.action);
+    if (!act || act.frames.length === 0) return true;
+    return now - this.actAt - (this.pauseAt ? this.pauseMs : 0) >= act.frames.length * Math.max(1, act.ticks) * FRAME;
+  }
   rect: [number, number, number, number] | null = null; // 上一帧画出的范围（点选目标用）
 
   constructor(f: BattleFighter) {
@@ -115,11 +146,16 @@ class Fighter {
   }
 
   frame(assets: Assets, now: number): [number, number, number] | null {
+    if (this.pauseAt) {
+      if (now < this.pauseAt + this.pauseMs) now = this.pauseAt;
+      else { this.actAt += this.pauseMs; this.pauseAt = 0; }
+    }
     const def = assets.anim(this.f.sprite);
     if (!def) return null;
     let act: AnimAction | undefined = findAction(def, this.dir, this.action);
     if (!act || act.frames.length === 0) return null;
-    const ms = Math.max(1, act.ticks) * FRAME;
+    const ms = Math.max(1, act.ticks) * FRAME / (this.walkFast && this.action === ANIM.WALK ? 2 : 1)
+      / (this.action === ANIM.STAND || this.action === ANIM.DEAD ? 1 : battleSpeed());
     let i = Math.max(0, Math.floor((now - this.actAt) / ms)); // 动作可能在本帧稍后才开始（actAt 略大于 now）
     if (i >= act.frames.length) {
       if (this.onHit && !this.hitDone) { this.hitDone = true; this.onHit(); } // 没有命中帧的动作在结束时触发
@@ -129,12 +165,16 @@ class Fighter {
     } else if (this.onHit && !this.hitDone) {
       for (let k = 0; k <= i; k++) if (HIT_EVENT(act.frames[k][3])) { this.hitMarker = act.frames[k][3]; this.hitDone = true; this.onHit(); break; }
     }
-    // 帧事件 1..9999 是音效（pattern.cpp），这一帧刚变成当前帧时放
+    // 帧事件 1..9999 是音效（pattern.cpp），这一帧刚变成当前帧时放；画面帧率比动画慢时会跳过几帧，跳过的帧上的音效也补放
+    // （刚开始播或同一个动作里往前走才补；循环回头只放当前这帧）
     const idx = Math.min(i, act.frames.length - 1);
-    if (idx !== this.lastFrame) {
-      this.lastFrame = idx;
-      const ev = act.frames[idx][3];
-      if (ev > 0 && ev < 10000) sfx(ev, this.x);
+    if (idx !== this.lastFrame || act !== this.lastAct) {
+      const from = this.lastFrame < 0 || (act === this.lastAct && idx > this.lastFrame) ? this.lastFrame + 1 : idx; // 刚开始播（play 把 lastFrame 设成 -1）从第 0 帧补
+      this.lastFrame = idx; this.lastAct = act;
+      for (let k = from; k <= idx; k++) {
+        const ev = act.frames[k][3];
+        if (ev > 0 && ev < 10000) sfx(ev, this.x);
+      }
     }
     const [img, fx, fy] = act.frames[idx];
     return img < 0 ? null : [img, fx, fy];
@@ -164,6 +204,7 @@ export interface BattleHost {
   place(): [number, number, number]; // 楼层、x、y（自动抓宠在楼层 500 的部分区域不动作）
   finish(end: S2CBattleEnd | null): void; // 战斗画面结束，回到地图（结果窗口画在地图上）
   quick(): boolean;         // 快速战斗：不画战斗画面（quickFrame），开战时决定
+  names(): boolean;         // F11：头顶名字（BattleNameDisp）
 }
 
 export class BattleScreen {
@@ -255,6 +296,7 @@ export class BattleScreen {
     this.pvp = m.pvp;
     this.event = m.event;
     this.turnMs = m.turnTime;
+    speedMul = m.speed > 0 ? Math.max(0.25, Math.min(4, m.speed / 100)) : 1;
     this.surprise = m.surprise;
     for (const f of m.fighters) {
       album.seen(f.sprite); // CheckBattleNewPet
@@ -325,6 +367,8 @@ export class BattleScreen {
     let from: [number, number] | null = null, to: [number, number] = [0, 0], at = 0;
     return (now) => {
       if (!from) {
+        ms = Math.max(FRAME, ms / battleSpeed()); // 跟着 rules.walkSpeed 加速
+        a.motion = null;
         from = [a.x, a.y]; to = tx(); at = now; a.play(ANIM.WALK, now, true);
         if (face && Math.hypot(to[0] - a.x, to[1] - a.y) > 1) a.dir = dirToward(to[0] - a.x, to[1] - a.y);
       }
@@ -332,6 +376,18 @@ export class BattleScreen {
       a.x = from[0] + (to[0] - from[0]) * t; a.y = from[1] + (to[1] - from[1]) * t;
       if (t >= 1) { a.play(ANIM.STAND, now, true); return true; }
       return false;
+    };
+  }
+
+  /**
+   * 走过去 / 走回来：和地图上原速走路一样快（一格 40 像素走 260 ms），moveStep 再按 rules.battleSpeed 加速，走路动画也一起加速。
+   * 原版这里是每帧 8 像素、走路动画两倍速（ATR_SPD 32），比地图上快一倍多，看起来像在冲，所以不照原版。
+   */
+  private walkStep(a: Fighter, tx: () => [number, number]): Step {
+    let inner: Step | null = null;
+    return (now) => {
+      if (!inner) { const [x, y] = tx(); inner = this.moveStep(a, () => [x, y], Math.max(FRAME, Math.hypot(x - a.x, y - a.y) / 40 * 260)); }
+      return inner(now);
     };
   }
 
@@ -343,15 +399,24 @@ export class BattleScreen {
     };
   }
 
+  /** 招式名称框（oft.cpp master 的 disp_kanji 窗口）：出现时 SE 202 */
   private showSkill(name: string, now: number) {
-    if (name) this.banner = { text: name, until: now + 1200 };
+    if (!name) return;
+    this.banner = { text: name, until: now + 1200 };
+    sfx(202, 400);
   }
 
-  /** damage_num：先快后慢地上浮约 24 像素后停住，约 1 秒后消失 */
-  private popup(a: Fighter, now: number, p: { text?: string; icon?: number; color?: string; dy?: number }) {
-    const x = a.x, y = a.y - 80 + (p.dy ?? 0), ui = this.host.ui;
-    this.fx.push({ at: now, ms: 1600, draw: (_t, age) => {
-      const k = Math.min(1, age / 400), yy = y - 24 * (1 - (1 - k) * (1 - k));
+  /**
+   * damage_num（oft.cpp 348-430）：在 (x, y-64) 出现，速度 24 每帧减 2 往上 12 帧（共 39 像素，先快后慢），
+   * 再往下加速 12 帧落回原处，停 60 帧后消失，共 84 帧。stay 为真时是图示型的（Guard 等）原地不动。
+   */
+  private popup(a: Fighter, now: number, p: { text?: string; icon?: number; color?: string; dy?: number; stay?: boolean }) {
+    const x = a.x, y = a.y - 64 + (p.dy ?? 0), ui = this.host.ui;
+    this.fx.push({ at: now, ms: 84 * FRAME, draw: (_t, age) => {
+      const f = age / FRAME;
+      // 上升：第 i 帧移动 (24 − 2i)/4；落下对称
+      const up = (n: number) => { const m = Math.min(12, Math.max(0, n)); return (24 * m - m * (m - 1)) / 4; };
+      const yy = p.stay ? y : f < 12 ? y - up(f) : f < 24 ? y - 39 + (39 - up(24 - f)) : y;
       if (p.icon) ui.image(p.icon, x, yy);
       if (p.text) ui.texts.push({ x, y: yy - 8, text: p.text, color: p.color ?? FONT.RED, align: "center" });
     } });
@@ -361,14 +426,13 @@ export class BattleScreen {
   private hitMark(t: Fighter, now: number, guarded: boolean, critical: boolean) {
     const ui = this.host.ui, x = t.x, y = t.y - 32;
     const base = guarded ? CG.HIT_MARK_12 : CG.HIT_MARK_22;
-    const life = 8 * FRAME * (critical ? 2 : 1);
-    this.fx.push({ at: now, ms: life, draw: (k) => ui.image(base - Math.min(2, Math.floor(k * 3)), x, y) });
-    if (!critical) return;
+    const life = (critical ? 32 : 8) * FRAME;
+    if (!critical) { this.fx.push({ at: now, ms: life, draw: (k) => ui.image(base - Math.min(2, Math.floor(k * 3)), x, y) }); return; }
     for (let d = 5; d > 0; d--) {
-      const ang = (d * 6) / 32 * Math.PI * 2, spd = 4 + Math.random() * 3;
-      this.fx.push({ at: now, ms: 16 * FRAME, draw: (k, age) => {
+      const crs = d * 6, ang = crs / 32 * Math.PI * 2, spd = (4 + Math.floor(Math.random() * 4)) / 4;
+      this.fx.push({ at: now, ms: life, draw: (k, age) => {
         const dist = spd * age / FRAME;
-        ui.image(k < 0.5 ? CG.HIT_MARK_01 : CG.HIT_MARK_00, x + Math.cos(ang) * dist, y + Math.sin(ang) * dist * 0.75);
+        ui.image(k < 0.5 ? CG.HIT_MARK_01 : CG.HIT_MARK_00, x + Math.sin(ang) * dist, y - Math.cos(ang) * dist);
       } });
     }
   }
@@ -385,6 +449,13 @@ export class BattleScreen {
       case "guard":
         steps.push(this.waitStep(400, (now) => { this.showSkill(e.skill, now); a.play(ANIM.GUARD, now); this.popup(a, now, { icon: CG.ICON_GUARD }); }));
         break;
+      case "stat": {
+        // BD|…|d1 3..6："攻 上升N％" 绿字在目标 y-64（oft.cpp 5527-5600 damage_num 37-40）
+        const t = this.fighters.get(e.target) ?? a;
+        const name = ["回避", "攻", "防", "敏"][e.stat - 37] ?? "";
+        steps.push(this.waitStep(350, (now) => { this.popup(t, now, { text: `${name} ${e.statVal > 0 ? "上升" : "下降"}${Math.abs(e.statVal)}％`, color: FONT.GREEN, dy: 16 }); }));
+        break;
+      }
       case "escape":
         if (e.ok) {
           // BATTLE_Exit：玩家逃走时出场的宠物一起离开
@@ -482,7 +553,9 @@ export class BattleScreen {
       }
       case "field":
         // BV：战场属性改变；回合数到了（actor -1，不会走到这里）在 onTurn 处理
-        steps.push(this.waitStep(600, (now) => { this.showSkill(e.skill, now); a.play(ANIM.ATTACK, now); this.fieldAttr = e.status; }));
+        // case 85 / 86：施法者转回自己那一边站着，SPR_effect01 放在身体中央，播完属性才换
+        steps.push(this.waitStep(900, (now) => { this.showSkill(e.skill, now); a.dir = a.homeDir(); a.play(ANIM.STAND, now, true); this.animOnce(FX.FIELD, a.x, a.y - 32, now); }));
+        steps.push(this.waitStep(1, () => { this.fieldAttr = e.status; }));
         break;
       case "poison":
         // BD|r|0|0|人|p骑宠|：骑宠的那一份另外显示
@@ -504,12 +577,15 @@ export class BattleScreen {
       case "noguard":
         steps.push(this.waitStep(500, (now) => { this.showSkill(e.skill || "蓄力", now); a.play(ANIM.GUARD, now); }));
         break;
-      case "hide":
-        // 地球一周：钻进地底，下回合从对手身后出来攻击（原版 BF / BI）
+      case "hide": {
+        // 地球一周（BF，oft.cpp monster case 80）：朝自己背后走出画面（己方方向 7 往右下、敌方方向 3 往左上），
+        // 下回合（BI，ATT_IN）从画面另一头进场攻击，像绕了地球一圈
         steps.push(this.waitStep(1, (now) => this.showSkill(e.skill, now)));
-        steps.push(this.moveStep(a, () => [a.x, a.y + 30], 300, false));
+        const out: [number, number] = a.f.slot < 10 ? [880, a.homeY + (880 - a.homeX) * 0.75] : [-80, a.homeY - (a.homeX + 80) * 0.75];
+        steps.push(this.walkStep(a, () => out));
         steps.push(this.waitStep(1, () => { a.hidden = true; a.x = a.homeX; a.y = a.homeY; }));
         break;
+      }
       case "item":
         // 道具（BJ，使用者身上放出 SPR_item3）：播放同咒术
         return this.magicSteps(a, group, ITEM_EFFECT_USER);
@@ -519,6 +595,7 @@ export class BattleScreen {
           a.hp = e.hp; if (a.f.slot === this.me) a.mp = e.actorMp;
           if (e.damage !== 0) this.popup(a, now, { text: String(Math.abs(e.damage)), color: e.damage > 0 ? FONT.GREEN : FONT.RED });
           if (e.mpDamage !== 0) this.popup(a, now, { text: String(Math.abs(e.mpDamage)), color: e.mpDamage > 0 ? FONT.YELLOW : FONT.RED, dy: 14 });
+          if (e.damage > 0 || e.mpDamage > 0) sfx(102, a.x); // master：HP / MP 回复时 SE 102
         }));
         break;
       case "heal":
@@ -530,6 +607,7 @@ export class BattleScreen {
           t.hp = e.hp; t.status = e.status;
           if (e.kind === "revive") { t.dead = false; t.play(ANIM.STAND, now, true); }
           this.popup(t, now, { text: String(e.damage), color: FONT.GREEN });
+          sfx(102, t.x);
         }));
         break;
       }
@@ -598,11 +676,13 @@ export class BattleScreen {
   }
 
   private applyMagic(e: BattleEvent, t: Fighter, a: Fighter, now: number) {
+    if (e.effect === 100606) t.reversed = e.ok; // MAGIC_AttReverse（BR）：头上的反转记号
     switch (e.result) {
       case "heal":
       case "revive":
         if (e.result === "revive" && e.hp > 0) { t.dead = false; t.play(ANIM.STAND, now, true); }
         if (e.damage > 0 || e.result === "revive") this.popup(t, now, { text: String(e.damage), color: FONT.GREEN });
+        if (e.damage > 0 || e.mpDamage > 0 || e.result === "revive") sfx(102, t.x); // master：HP / MP 回复时 SE 102
         if (e.mpDamage > 0) { if (t !== a) t.mp += e.mpDamage; this.popup(t, now, { text: String(e.mpDamage), color: FONT.YELLOW, dy: 14 }); } // 对自己用时 actorMp 已经是回复后的
         if (e.petDamage > 0) this.popup(t, now, { text: String(e.petDamage), color: FONT.GREEN, dy: 25 });
         break;
@@ -613,7 +693,8 @@ export class BattleScreen {
         this.popup(t, now, { icon: CG.ICON_MISS });
         break;
       case "damage":
-        this.applyHit(e, t, a, now);
+        // 咒术的伤害（oft.cpp master 的 set_jujutsu_hit_mark）不放 play_damage，声音只有效果动画帧上的
+        this.applyHit(e, t, a, now, 0);
         return;
     }
     t.hp = e.hp; t.status = e.status;
@@ -625,11 +706,15 @@ export class BattleScreen {
     const def = this.host.assets.anim(id);
     const act = def && findAction(def, 0, ANIM.STAND);
     const ms = act && act.frames.length > 0 ? act.frames.length * Math.max(1, act.ticks) * FRAME : 600;
+    let last = -1; // 放过音效的最后一帧
     this.fx.push({ at: now, ms, draw: (_k, age) => {
       if (age < 0) return; // 还没轮到（轮流攻击的时间差）
       const d = this.host.assets.anim(id), ac = d && findAction(d, 0, ANIM.STAND);
       if (!ac || ac.frames.length === 0) return;
       const i = Math.min(ac.frames.length - 1, Math.floor(age / (Math.max(1, ac.ticks) * FRAME)));
+      // 咒术、技能的效果动画和角色一样由 pattern() 播：帧事件 1..9999 是音效（跳过的帧也补放）
+      for (let k = last + 1; k <= i; k++) { const ev = ac.frames[k][3]; if (ev > 0 && ev < 10000) sfx(ev, x); }
+      last = Math.max(last, i);
       const [img, fx, fy] = ac.frames[i];
       if (img >= 0) this.host.ui.image(img, x + fx, y + fy, undefined, true);
     } });
@@ -653,7 +738,7 @@ export class BattleScreen {
       if (at === 0) {
         at = now;
         a.dir = dirToward(t.x - a.x, t.y - a.y);
-        a.play(ANIM.ATTACK, now, false, () => { hit = true; this.popup(a, performance.now(), { icon: CG.ICON_CAPTURE }); });
+        a.play(ANIM.ATTACK, now, false, () => { hit = true; this.popup(a, this.vnow, { icon: CG.ICON_CAPTURE }); });
       }
       if (!hit && now - at > 2500) hit = true;
       return hit && now - at > 500;
@@ -686,29 +771,32 @@ export class BattleScreen {
     return steps;
   }
 
-  /** 攻击（含连击、反击、守护）：走到目标面前 → 每一下攻击动画在命中帧结算 → 走回原位 */
+  /** 攻击（含连击、反击、守护）：走到目标面前 → 每一下攻击动画在命中帧结算 → 走回原位；远程武器不走过去，射 / 丢出飞行物 */
   private attackSteps(a: Fighter, group: BattleEvent[]): Step[] {
     const steps: Step[] = [];
     const first = group[0];
+    if (first.shoot > 0 && !a.hidden) return first.shoot === 4 ? this.boomerangSteps(a, group) : this.shootSteps(a, group);
     const t0 = this.fighters.get(first.target);
     if (!t0) return [];
     const front = (t: Fighter): [number, number] => {
       const dx = a.homeX - t.homeX, dy = a.homeY - t.homeY, len = Math.hypot(dx, dy) || 1;
-      return [t.homeX + dx / len * 50, t.homeY + dy / len * 50];
+      return [t.homeX + dx / len * 64, t.homeY + dy / len * 64]; // case 1：距离 ≤ 32×2 就到了
     };
     if (a.hidden) {
-      // 从地底钻出来，出现在目标身后
-      steps.push(this.waitStep(1, () => {
+      // 地球一周的第二回合（BI，oft.cpp ATT_IN）：己方从左上角 (−SCREEN_OUT, 8)、敌方从右下角进场，走到目标面前攻击，打完照常走回原位
+      steps.push(this.waitStep(1, (now) => {
         a.hidden = false;
-        const [fx, fy] = front(t0);
-        a.x = t0.homeX * 2 - fx; a.y = t0.homeY * 2 - fy;
+        [a.x, a.y] = a.f.slot < 10 ? [-80, 8] : [880, 592];
+        this.showSkill(first.skill, now);
       }));
+      steps.push(this.walkStep(a, () => front(t0)));
     } else {
       steps.push(this.waitStep(1, (now) => {
         this.showSkill(first.skill, now);
+        this.skillIcon(a, first.icon, now);
         if (first.kind === "counter") this.popup(a, now, { icon: CG.ICON_COUNTER });
       }));
-      steps.push(this.moveStep(a, () => front(t0), first.kind === "counter" ? 200 : 350));
+      steps.push(this.walkStep(a, () => front(t0)));
     }
     for (const e of group) {
       const t = this.fighters.get(e.target);
@@ -721,25 +809,164 @@ export class BattleScreen {
           return [(fx + t.homeX) / 2, (fy + t.homeY) / 2];
         }, 200));
       }
-      let hit = false, done = 0, at = 0;
-      const strike = (now: number) => { if (!hit) { hit = true; done = now; this.applyHit(e, g ?? t, a, now); } };
+      // case 2：播攻击动作，命中帧结算并定住 hit stop（普通 8 帧、会心 32），动作播完后等 20 帧（STIMER）再走回去；连击直接接下一下
+      let hit = false, at = 0, ended = 0;
+      const strike = (now: number) => {
+        if (hit) return;
+        hit = true; this.applyHit(e, g ?? t, a, now);
+        if (e.damage > 0 || e.result === "vanish" || e.result === "absorb") a.freeze(now, (e.result === "critical" ? 32 : 8) * FRAME);
+      };
       steps.push((now) => {
-        if (!hit && done === 0) {
-          done = -1; at = now;
+        if (at === 0) {
+          at = now;
           a.dir = dirToward(t.x - a.x, t.y - a.y);
-          a.play(ANIM.ATTACK, now, false, () => strike(performance.now())); // 命中帧的时刻（不是这一步开始的时刻），否则挨打的动作一开始就已经播完
+          a.play(ANIM.ATTACK, now, false, () => strike(this.vnow)); // 命中帧的时刻（不是这一步开始的时刻），否则挨打的动作一开始就已经播完
         }
         if (!hit && now - at > 2500) strike(now); // 动画数据没到时也不能卡住
-        return hit && now - done > (e.combo ? 250 : 450);
+        if (!hit) return false;
+        if (ended === 0 && a.idle(this.host.assets, now)) ended = now; // 攻击动作播完（回到站立）
+        if (ended === 0 && now - at > 4000) ended = now;
+        return ended > 0 && now - ended >= (e.combo ? 0 : 20 * FRAME);
       });
       if (g) steps.push(this.moveStep(g, () => [g.homeX, g.homeY], 200));
     }
-    steps.push(this.moveStep(a, () => [a.homeX, a.homeY], first.kind === "counter" ? 200 : 350));
-    steps.push(this.waitStep(80, () => { a.dir = a.homeDir(); }));
+    steps.push(this.walkStep(a, () => [a.homeX, a.homeY]));
+    steps.push(this.waitStep(1, () => { a.dir = a.homeDir(); }));
     return steps;
   }
 
-  private applyHit(e: BattleEvent, t: Fighter, a: Fighter, now: number) {
+  /**
+   * 飞行物（oft.cpp 的 T_PRIO_BOW 物件）：每帧按 pos() 的位置画，pos() 回 null 就消失。
+   * 图号 ≥ 100000 是动画（按 dir 取攻击动作，循环播放），否则是地图图号。
+   */
+  private missile(img: number, dir: number, now: number, pos: () => [number, number] | null) {
+    const fx: Fx = { at: now, ms: 1e9, draw: (_k, age) => {
+      const p = pos();
+      if (!p) { fx.ms = 0; return; }
+      if (img >= 100000) this.animAt(img, p[0], p[1], age, dir, ANIM.ATTACK);
+      else this.host.ui.image(img, p[0], p[1]);
+    } };
+    this.fx.push(fx);
+  }
+
+  /** 原版 radar 的 32 方向（0 朝上、顺时针），箭的图按 crs / 2 选 */
+  private crs32(dx: number, dy: number): number {
+    return ((Math.round(Math.atan2(dx, -dy) / (Math.PI * 2) * 32) % 32) + 32) % 32;
+  }
+
+  /**
+   * 弓 / 投掷斧 / 碎石器（oft.cpp ATT_BOW，向量 30..33）：站在原地做攻击（弓）或投掷动作，命中帧飞出飞行物与地上的影子，
+   * 每帧 32 像素飞到目标、落到时结算；连击就一支一支射。
+   */
+  private shootSteps(a: Fighter, group: BattleEvent[]): Step[] {
+    const steps: Step[] = [];
+    const kind = group[0].shoot; // 1 弓、2 投掷斧、3 碎石器
+    for (const e of group) {
+      const t0 = this.fighters.get(e.target);
+      if (!t0) continue;
+      const g = e.guardian >= 0 ? this.fighters.get(e.guardian) : undefined;
+      const t = g ?? t0;
+      let launched = false, at = 0;
+      steps.push((now) => {
+        if (at === 0) {
+          at = now;
+          this.showSkill(e.skill, now);
+          if (e === group[0]) this.skillIcon(a, e.icon, now);
+          a.dir = dirToward(t.x - a.x, t.y - a.y);
+          a.play(kind === 1 ? ANIM.ATTACK : ANIM.THROW, now, false, () => { launched = true; });
+        }
+        if (!launched && now - at > 2500) launched = true; // 动画数据没到时也不能卡住
+        return launched;
+      });
+      let from: [number, number] | null = null, start = 0, ms = 0, hit = false, done = 0;
+      steps.push((now) => {
+        if (!from) {
+          from = [a.x, a.y]; start = now;
+          const dx = t.x - from[0], dy = t.y - from[1], dist = Math.hypot(dx, dy);
+          ms = Math.max(120, dist / MISSILE.SPEED * FRAME);
+          const crs = this.crs32(dx, dy), dir = dirToward(dx, dy);
+          const img = kind === 1 ? MISSILE.ARROW + (crs >> 1) : kind === 2 ? MISSILE.AXE : MISSILE.STONE;
+          const shadow = kind === 1 ? img + 20 : kind === 2 ? MISSILE.AXE_SHADOW : MISSILE.STONE_SHADOW;
+          const [sx, sy] = from;
+          const k = () => Math.min(1, (this.vnow - start) / ms);
+          // 影子贴着地面直飞；飞行物从 28 像素高射出，中途再抛高一点（原版用 ATR_V_MINI 的抛物线）
+          this.missile(shadow, dir, now, () => hit ? null : [sx + dx * k(), sy + dy * k()]);
+          this.missile(img, dir, now, () => { if (hit) return null; const q = k(); return [sx + dx * q, sy + dy * q - 28 - 36 * Math.sin(Math.PI * q)]; });
+        }
+        if (!hit && now - start >= ms) {
+          hit = true; done = now;
+          this.applyHit(e, t, a, now, kind === 1 ? 12 : 252);
+          // axe_shadow：打中后斧头弹开（hit stop 8 帧 + 弹 35 帧）落地，SE 251（打空了没有弹开）
+          if (kind === 2 && (e.damage > 0 || e.result === "vanish" || e.result === "absorb")) this.later(now, (8 + 35) * FRAME, () => sfx(251, t.x));
+        }
+        return hit && now - done > 300;
+      });
+    }
+    steps.push(this.waitStep(150, (now) => { a.dir = a.homeDir(); a.play(ANIM.STAND, now, true); }));
+    return steps;
+  }
+
+  /**
+   * 回力镖（oft.cpp ATT_BOOMERANG，向量 70..73）：攻击动作的命中帧丢出，飞过对方那一排（服务端 BoomerangVsTbl 的顺序）、
+   * 经过每个人时结算，再飞回手上；接住时做挥手动作 16 帧。
+   */
+  private boomerangSteps(a: Fighter, group: BattleEvent[]): Step[] {
+    const hits = group.flatMap((e) => { const t = this.fighters.get(e.target); return t ? [{ e, t }] : []; });
+    if (hits.length === 0) return [];
+    const steps: Step[] = [];
+    let launched = false, at = 0;
+    steps.push((now) => {
+      if (at === 0) {
+        at = now;
+        this.showSkill(group[0].skill, now);
+        this.skillIcon(a, group[0].icon, now);
+        a.dir = dirToward(hits[0].t.x - a.x, hits[0].t.y - a.y);
+        a.play(ANIM.ATTACK, now, false, () => { launched = true; });
+      }
+      if (!launched && now - at > 2500) launched = true;
+      return launched;
+    });
+    type Leg = { from: [number, number]; to: [number, number]; ms: number; hit: { e: BattleEvent; t: Fighter } | null };
+    const legs: Leg[] = [];
+    let idx = 0, legAt = 0, cur: [number, number] | null = null, flying = false, caught = false;
+    steps.push((now) => {
+      if (!flying) {
+        flying = true; legAt = now;
+        let p: [number, number] = [a.x, a.y];
+        const stops = [...hits.map((h) => ({ pt: [h.t.x, h.t.y] as [number, number], hit: h as Leg["hit"] })), { pt: [a.x, a.y] as [number, number], hit: null }];
+        for (const s of stops) {
+          legs.push({ from: p, to: s.pt, ms: Math.max(100, Math.hypot(s.pt[0] - p[0], s.pt[1] - p[1]) / 24 * FRAME), hit: s.hit });
+          p = s.pt;
+        }
+        cur = [a.x, a.y];
+        const img = this.host.assets.anim(MISSILE.BOOMERANG) ? MISSILE.BOOMERANG : MISSILE.AXE;
+        this.missile(img, a.dir, now, () => caught || !cur ? null : [cur[0], cur[1] - 28]);
+      }
+      const leg = legs[idx], q = Math.min(1, (now - legAt) / leg.ms);
+      cur = [leg.from[0] + (leg.to[0] - leg.from[0]) * q, leg.from[1] + (leg.to[1] - leg.from[1]) * q];
+      if (q < 1) return false;
+      if (leg.hit) this.applyHit(leg.hit.e, leg.hit.t, a, now, 252); // boomerang：打中 SE 252
+      idx++; legAt = now;
+      if (idx < legs.length) return false;
+      caught = true;
+      return true;
+    });
+    steps.push(this.waitStep(16 * FRAME, (now) => { a.play(ANIM.HAND, now, true); }));
+    steps.push(this.waitStep(80, (now) => { a.dir = a.homeDir(); a.play(ANIM.STAND, now, true); }));
+    return steps;
+  }
+
+  /** 过 ms 之后做一次 fn（跟着战斗的时钟走，挂在特效清单上） */
+  private later(now: number, ms: number, fn: () => void) {
+    let done = false;
+    this.fx.push({ at: now, ms: ms + 100, draw: (_k, age) => { if (!done && age >= ms) { done = true; fn(); } } });
+  }
+
+  /**
+   * 结算一下的演出。hitSe 是挨打的声音：近战照攻击动画的命中帧记号（play_damage）；远程武器由飞行物自己放
+   * （oft.cpp bow 12、axe_shadow / stone_shadow / boomerang 252），所以呼叫的地方另外给。
+   */
+  private applyHit(e: BattleEvent, t: Fighter, a: Fighter, now: number, hitSe = damageSe(a.hitMarker)) {
     switch (e.result) {
       case "dodge": {
         // 闪避：往攻击者的反方向一闪再回来（SE 8）；攻击者正站在面前，所以就是背着他退一步
@@ -756,17 +983,48 @@ export class BattleScreen {
         this.popup(t, now, { icon: CG.ICON_MISS });
         break;
       case "guard":
-        sfx(damageSe(a.hitMarker), t.x);
-        this.popup(t, now, { icon: CG.ICON_GUARD });
+        sfx(hitSe, t.x);
+        this.popup(t, now, { icon: CG.ICON_GUARD, dy: 16, stay: true });
         this.hitMark(t, now, true, false);
         t.play(ANIM.GUARD, now);
         break;
-      default:
-        sfx(damageSe(a.hitMarker), t.x);
-        this.hitMark(t, now, e.guarded, e.result === "critical");
-        this.popup(t, now, { text: String(e.damage), color: e.result === "critical" ? FONT.YELLOW : FONT.RED });
+      case "vanish":
+        // 守之精灵（ATT_BALLIA）：SPR_barrior 盖在目标 y-32，没有数字、没有受伤动作，但有火花与声音、抖 8 帧
+        sfx(hitSe, t.x);
+        this.animOnce(FX.BARRIER, t.x, t.y - 32, now);
+        this.hitMark(t, now, false, false);
+        t.shakeUntil = now + 8 * FRAME;
+        break;
+      case "absorb":
+        // 光之精灵（ATT_ABSORPTION）：SPR_kyusyu，伤害变成绿字回血（y-64），有火花与声音、抖 8 帧
+        sfx(hitSe, t.x);
+        this.animOnce(FX.ABSORB, t.x, t.y - 32, now);
+        this.hitMark(t, now, false, false);
+        this.popup(t, now, { text: String(e.damage), color: FONT.GREEN });
+        t.shakeUntil = now + 8 * FRAME;
+        break;
+      case "reflect": {
+        // 镜之精灵（ATT_REFLEX）：SPR_mirror 盖在目标身上，攻击者自己挨这一下：红字、受伤动作、抖 32 帧，死了就倒
+        this.animOnce(FX.MIRROR, t.x, t.y - 32, now);
+        sfx(hitSe, a.x);
+        this.hitMark(a, now, false, false);
+        this.popup(a, now, { text: String(e.damage), color: FONT.RED });
+        a.play(ANIM.DAMAGE, now);
+        a.shakeUntil = now + 32 * FRAME;
+        if (e.actorHp <= 0) { a.dead = true; a.status = 0; a.dying = true; a.deadAt = 0; this.knockback(a, t, now, true, true); }
+        break;
+      }
+      default: {
+        const crit = e.result === "critical";
+        sfx(hitSe, t.x);
+        this.hitMark(t, now, e.guarded, crit);
+        this.popup(t, now, { text: String(e.damage), color: crit ? FONT.YELLOW : FONT.RED });
         if (e.mpDamage > 0) this.popup(t, now, { text: String(e.mpDamage), color: FONT.YELLOW, dy: 14 });
         t.play(e.guarded ? ANIM.GUARD : ANIM.DAMAGE, now);
+        // hit stop：原地抖 8 帧（会心 32），然后被击退 52.5 像素（会心 81）、停 16 帧再走回原位（oft.cpp case 10..14）
+        t.shakeUntil = now + (crit ? 32 : 8) * FRAME;
+        if (!e.fly && !e.guarded) this.knockback(t, a, now, crit, !!e.dead);
+      }
     }
     t.hp = e.hp; t.status = e.status;
     if (t.f.rideMaxHp > 0 && t.rideHp > 0) {
@@ -781,13 +1039,87 @@ export class BattleScreen {
     }
     if (e.actorHp > a.hp) this.popup(a, now, { text: String(e.actorHp - a.hp), color: FONT.GREEN });
     a.hp = e.actorHp;
-    if (e.dead) { t.dead = true; t.status = 0; t.play(ANIM.DEAD, now); }
+    if (e.fly) {
+      t.motion = null;
+      // 击飞（oft.cpp case 55：ATT_AKO1 / AKO2）：朝攻击者的反方向以每帧 63 像素飞出画面（SE 11），飞出去就离场；服务端已把他请出战斗
+      t.dead = true; t.status = 0; t.play(ANIM.DAMAGE, now);
+      sfx(11, t.x);
+      const dx = t.x - a.x, dy = t.y - a.y, len = Math.hypot(dx, dy) || 1;
+      t.fly = [dx / len * 63 / FRAME, dy / len * 63 / FRAME];
+      if (t.f.slot === this.me) this.host.chat("你被击飞了！", FONT.YELLOW);
+    } else if (e.dead) {
+      t.dead = true; t.status = 0;
+      if (!this.quick) this.slowUntil = Math.max(this.slowUntil, now + Math.max(0, t.shakeUntil - now)); // 打倒的瞬间到他抖完：慢动作
+      // 走回原位后才倒下（VCT_NO_DIE）；没有击退动作（防御中、无效……）就直接倒
+      if (t.motion) t.dying = true; else this.die(t, now);
+    }
+  }
+
+  /** 被击退：朝攻击者的反方向退 52.5 像素（会心 81），停 16 帧，再走回原位（倒下的 1 像素 / 帧、其余 2.5）。dying 为真时回到原位就倒下 */
+  private knockback(t: Fighter, a: Fighter, now: number, crit: boolean, dying: boolean) {
+    const dx = t.x - a.x, dy = t.y - a.y, len = Math.hypot(dx, dy) || 1, dist = crit ? 81 : 52.5;
+    const shake = Math.max(0, t.shakeUntil - now);
+    t.motion = { phase: "back", from: [t.x, t.y], to: [t.x + dx / len * dist, t.y + dy / len * dist * 0.75], at: now + shake, ms: (crit ? 18 : 15) * FRAME };
+    t.dying = dying;
+  }
+
+  /** 倒下：播一次倒地动画，播完头上绕星星、SE 6（VCT_NO_DIE+2 set_piyo_loop） */
+  private die(t: Fighter, now: number) {
+    t.dying = false; t.deadAt = now; t.play(ANIM.DEAD, now);
+  }
+
+  /** 攻击者头上的技能图示（set_damage_num 的图示型：目标 y-48，静止 84 帧） */
+  private skillIcon(a: Fighter, code: number, now: number) {
+    const img = SKILL_ICON[code];
+    if (!img) return;
+    const x = a.x, y = a.y - 48;
+    this.fx.push({ at: now, ms: 84 * FRAME, draw: (_k, age) => { if (img >= 100000) this.animAt(img, x, y, age); else this.host.ui.image(img, x, y); } });
   }
 
   // ---------------- 每帧 ----------------
 
-  frame(now: number) {
+  private lastNow = 0;
+  /** 战斗的时钟：平常跟着真实时间走，慢动作（slowUntil 之前）时只走 1/4 */
+  private vnow = performance.now();
+  private slowUntil = 0;
+
+  frame(realNow: number) {
     const ui = this.host.ui;
+    const rdt = this.lastNow > 0 ? Math.min(100, realNow - this.lastNow) : FRAME;
+    this.lastNow = realNow;
+    const dt = this.vnow < this.slowUntil ? rdt / 4 : rdt;
+    this.vnow += dt;
+    const now = this.vnow;
+    for (const f of this.fighters.values()) {
+      if (f.gone) continue;
+      if (f.fly) {
+        f.x += f.fly[0] * dt; f.y += f.fly[1] * dt;
+        if (f.x < -120 || f.x > 920 || f.y < -120 || f.y > 720) { f.gone = true; f.fly = null; }
+        continue;
+      }
+      const m = f.motion;
+      if (m && now >= m.at) {
+        const k = Math.min(1, (now - m.at) / m.ms);
+        f.x = m.from[0] + (m.to[0] - m.from[0]) * k; f.y = m.from[1] + (m.to[1] - m.from[1]) * k;
+        if (k >= 1) {
+          if (m.phase === "back") f.motion = { phase: "wait", from: m.to, to: m.to, at: now, ms: 16 * FRAME };
+          else if (m.phase === "wait") {
+            const d = Math.hypot(f.homeX - f.x, f.homeY - f.y);
+            f.motion = { phase: "return", from: [f.x, f.y], to: [f.homeX, f.homeY], at: now, ms: Math.max(1, d / (f.dying ? 1 : 2.5) * FRAME) };
+            f.play(ANIM.WALK, now, true);
+          } else {
+            f.motion = null;
+            if (f.dying) this.die(f, now); else if (!f.dead) f.play(ANIM.STAND, now, true);
+          }
+        }
+      }
+      // 倒地动画播完：星星绕头 + SE 6（VCT_NO_DIE+2）
+      if (f.dead && f.deadAt > 0 && !f.stars) {
+        const def = this.host.assets.anim(f.f.sprite), act = def && findAction(def, f.dir, ANIM.DEAD);
+        const len = act && act.frames.length ? act.frames.length * Math.max(1, act.ticks) * FRAME : 600;
+        if (now - f.deadAt >= len) { f.stars = true; sfx(6, f.x); }
+      }
+    }
     while (this.queue.length > 0 && this.queue[0](now)) this.queue.shift();
     const idle = this.queue.length === 0;
     if (idle && !this.end && this.menuAt === 0 && this.tiles !== null && !(this.surprise === 2 && this.turns === 0)) this.openMenu(now);
@@ -811,7 +1143,7 @@ export class BattleScreen {
     }
     // SurprisalDisp：第一回合播完之前显示
     // 战场属性（BV）：画在左上角
-    if (this.fieldAttr > 0 && this.fieldAttr < ELEM.length) ui.text(16, 16, `战场属性：${ELEM[this.fieldAttr]}`, FONT.YELLOW);
+    if (this.fieldAttr > 0 && this.fieldAttr < ELEM.length) { ui.text(16, 16, `战场属性：${ELEM[this.fieldAttr]}`, FONT.YELLOW); ui.image(FX.ATR_ICON + this.fieldAttr, 688, 476); } // disp_attrib：右下角 CG_ATR_ICON_*_BATTLE
     if (this.surprise && this.turns === 0) {
       ui.window(304, 252, 3, 2);
       ui.text(304 + 38, 252 + 40, this.surprise === 2 ? " 遭敌偷袭 " : "出其不意的攻击", FONT.WHITE);
@@ -842,16 +1174,23 @@ export class BattleScreen {
     if (this.end) { this.host.finish(this.end); return; }
     if (this.menuAt === 0 && !(this.surprise === 2 && this.turns === 0)) this.openMenu(now);
     if (this.menuAt > 0 && !this.sent) this.autoCommand();
+    // "快速战斗中"的提示只在打得久的时候显示（等队友下指令、服务端慢）：一般一场几百毫秒就打完，
+    // 一出现就消失看起来像弹窗闪了一下
+    if (this.quickAt === 0) this.quickAt = now;
+    if (now - this.quickAt < 1500) return;
     const label = `快速战斗中…　第 ${this.turns + 1} 回合`, ui = this.host.ui;
     ui.box(400 - 90, 40, 400 + 90, 62, "rgba(0,0,0,0.6)", true);
     ui.texts.push({ x: 400, y: 44, text: label, color: FONT.YELLOW, align: "center" });
   }
+  private quickAt = 0; // 快速战斗开始画的时刻
+  private aiSaid = new Set<string>(); // 智能战斗这一场说过的话（每回合都缺补血时不要一直刷）
 
   private openMenu(now: number) {
     if (this.watch) return;
     const me = this.fighters.get(this.me);
     if (!me || me.gone) return;
     this.menuAt = now; this.deadline = now + this.turnMs;
+    if (!this.quick) sfx(202, 400); // BattleMenuProc：面板出现（快速战斗没有面板，不放）
     this.petMenuAt = 0; this.petSent = this.myPet() === null;
     if (me.dead) {
       // 自己倒下：没有人的指令，宠物也不下指令（BattleMenuProc 送 "W|FF|FF"）
@@ -907,12 +1246,19 @@ export class BattleScreen {
         continue;
       }
       const e = assets.image(fr[0]);
-      ui.image(fr[0], a.x + fr[1], a.y + fr[2], undefined, true);
+      const shake = now < a.shakeUntil ? (Math.floor(now / FRAME) % 2 ? 4 : -4) : 0; // case 11：以 4 像素幅度来回抖
+      ui.image(fr[0], a.x + fr[1] + shake, a.y + fr[2], undefined, true);
       if (e) a.rect = [a.x + fr[1] + e.ox, a.y + fr[2] + e.oy, e.w, e.h];
+      // 倒地后的星星（set_piyo_loop）：3 颗 SPR_star 绕着头顶转，椭圆 ±24 × ±10，一圈 60 帧，相位各差 1/3
+      if (a.stars && e) {
+        const cx = a.x, cy = a.y + fr[2] + e.oy, t = Math.floor(now / FRAME);
+        for (let i = 0; i < 3; i++) { const th = ((t + i * 20) % 60) / 60 * Math.PI * 2; this.animAt(FX.STAR, cx + Math.cos(th) * 24, cy + Math.sin(th) * 10, now); }
+      }
+      if (a.reversed && !a.dead) this.animAt(FX.REVERSE, a.x, a.y - 64, now); // BR：属性反转中（SPR_zokusei 循环）
     }
     for (const a of list) {
-      // 敌人头上常显名字与等级（原版要滑鼠移上去才显示；这里直接画，选目标时的提示照旧）
-      if (a.f.slot >= 10 && !a.dead) ui.texts.push({ x: Math.round(a.x), y: Math.round(a.y - 96), text: `${a.f.name} LV${a.f.level}`, color: FONT.WHITE, align: "center" });
+      // 头顶名字（BattleNameDisp：F11 开关，全部 20 人 "名字 LVn"，自己与自己的宠物黄字）；敌人的常显（原版要滑鼠移上去才显示）
+      if (!a.dead && (a.f.slot >= 10 || this.host.names())) ui.texts.push({ x: Math.round(a.x), y: Math.round(a.y - 96), text: `${a.f.name} LV${a.f.level}`, color: a.f.slot === this.me || a.f.slot === this.me + 5 ? FONT.YELLOW : FONT.WHITE, align: "center" });
       // 异常状态动画（katino）
       if (a.status > 0 && !a.dead) this.animAt(STATUS_SPR[a.status], a.x, a.y - 64, now);
       // 己方头顶的血条（HpMeterDisp）
@@ -934,13 +1280,13 @@ export class BattleScreen {
     }
   }
 
-  /** 画一个循环播放的动画（状态标记） */
-  private animAt(id: number, x: number, y: number, now: number) {
+  /** 画一个循环播放的动画（状态标记、飞行物） */
+  private animAt(id: number, x: number, y: number, now: number, dir = 0, type = ANIM.STAND) {
     const def = this.host.assets.anim(id);
-    const act = def && findAction(def, 0, ANIM.STAND);
+    const act = def && findAction(def, dir, type);
     if (!act || act.frames.length === 0) return;
     const ms = Math.max(1, act.ticks) * FRAME;
-    const [img, fx, fy] = act.frames[Math.floor(now / ms) % act.frames.length];
+    const [img, fx, fy] = act.frames[((Math.floor(now / ms) % act.frames.length) + act.frames.length) % act.frames.length]; // now 可能略小于 0（特效在这一帧稍后才建立）
     if (img >= 0) this.host.ui.image(img, x + fx, y + fy, undefined, true);
   }
 
@@ -1210,7 +1556,7 @@ export class BattleScreen {
     });
     this.aiKey = cmd.key; this.aiPetKey = cmd.petKey;
     this.aiFirst = false;
-    for (const t of cmd.chat) this.host.chat(t, FONT.WHITE);
+    for (const t of cmd.chat) if (!this.aiSaid.has(t)) { this.aiSaid.add(t); this.host.chat(t, FONT.WHITE); } // 同一场同一句只说一次
     this.aiLabel = cmd.label;
     this.aiPet = cmd.pet;
     switch (cmd.kind) {
@@ -1231,11 +1577,17 @@ export class BattleScreen {
     ui.window(290, wy, 3, 2);
     ui.text(290 + 38, wy + 28, "请选择", FONT.YELLOW);
     ui.text(290 + 38, wy + 52, "您的目标", FONT.YELLOW);
+    const boomerang = !this.capturing && this.host.inventory().items.some((i) => i.slot === 2 && i.type === 17); // 装着回力镖（ITEM_BOOMERANG）
     for (const a of this.fighters.values()) {
-      if (a.f.slot < 10 || a.dead || a.gone || a.hidden || !a.rect) continue;
+      // BattleButtonAttack：除了自己以外、还站着的 20 人都能点（打自己的宠物 / 队友也行，原版可以）；捕捉只能点敌人
+      if ((this.capturing ? a.f.slot < 10 : a.f.slot === this.me) || a.dead || a.gone || a.hidden || !a.rect) continue;
       const [x, y, w, h] = a.rect, id = `t-${a.f.slot}`;
       ui.hitBox(x, y, x + w, y + h, id); // 敌人头上本来就常显名字与等级（drawFighters），滑过时不再画一次，否则两行叠在一起像重影
+      // 拿着回力镖时整排一起亮（battlemenu.cpp BATTLE_BP_BOOMERANG：ACT_ATR_HIT_BOX_ALLn）
+      if (boomerang && ui.hovered(id)) for (const o of this.fighters.values()) if (Math.floor(o.f.slot / 5) === Math.floor(a.f.slot / 5) && o !== a && !o.dead && !o.gone && o.rect) ui.box(o.rect[0] - 2, o.rect[1] - 2, o.rect[0] + o.rect[2] + 2, o.rect[1] + o.rect[3] + 2, boxColor(), false);
+      if (a.f.slot < 10 && ui.hovered(id)) ui.texts.push({ x: Math.round(a.x), y: Math.round(a.y - 96), text: `${a.f.name} LV${a.f.level}`, color: FONT.YELLOW, align: "center" });
       if (ui.clicked(id)) {
+        sfx(217, 400); // BattleTargetSelect：选定目标
         const kind = this.capturing ? "capture" : "attack";
         this.lastButton = kind; this.capturing = false;
         this.submit(kind, a.f.slot);
@@ -1247,6 +1599,7 @@ export class BattleScreen {
   private submit(kind: string, target: number) {
     if (this.sent) return;
     this.sent = true; this.offButtons();
+    if (!this.quick) sfx(203, 400); // 指令送出（快速战斗不放，否则打完像有个看不见的框被关掉）
     this.host.send(kind, target);
     this.afterPlayer(kind);
   }
@@ -1262,7 +1615,7 @@ export class BattleScreen {
     if (!pet || this.petSent) return;
     if (kind === "escape") { this.sendPet(-1, -1); return; }
     if (this.host.auto()) { this.sendPet(...this.aiPet); return; }
-    this.petMenuAt = performance.now();
+    this.petMenuAt = this.vnow;
     const s = pet.info.skills.find((x) => x.slot === this.petSkill);
     this.petSelecting = !!s && s.field !== FIELD_MAP;
     if (!this.petSelecting) this.petSkill = -1;

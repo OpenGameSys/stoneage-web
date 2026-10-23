@@ -147,18 +147,6 @@ enemy=npcgen_man|file:add80/sa70/neweq/npc7
 
 {
 name=莫非的弟子
-floorid=3200
-borncenter=55,46
-dir=6
-time=0
-createnum=1
-ignoreinvincible=1
-graphicname=16208
-enemy=ITEMCHANGE|file:add80/sa70/neweq/eqmaker1.arg
-}
-
-{
-name=莫非的弟子
 floorid=31801
 borncenter=38,7
 dir=4
@@ -251,18 +239,6 @@ createnum=1
 ignoreinvincible=1
 graphicname=16208
 enemy=ITEMCHANGE|file:add80/sa70/neweq/eqmaker9.arg
-}
-
-{
-name=莫非的弟子
-floorid=31901
-borncenter=18,9
-dir=6
-time=0
-createnum=1
-ignoreinvincible=1
-graphicname=16208
-enemy=ITEMCHANGE|file:add80/sa70/neweq/eqmaker10.arg
 }
 
 {

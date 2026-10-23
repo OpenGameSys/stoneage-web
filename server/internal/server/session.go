@@ -532,6 +532,8 @@ func (s *session) handleWorld(m proto.Message) {
 		w.Trade(id, m.Cmd, m.Slot, m.Amount)
 	case *proto.Action:
 		w.Action(id, m.X, m.Y, m.Action)
+	case *proto.Mind:
+		w.Mind(id, m.Icon)
 	case *proto.CardExchange:
 		w.CardExchange(id)
 	case *proto.CardDelete:

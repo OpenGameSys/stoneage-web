@@ -259,3 +259,93 @@ func TestRidePoison(t *testing.T) {
 		t.Fatalf("人扣 20、骑宠扣到剩 1：hp %d→%d ride %d %+v", hp, p.HP, p.Ride.HP, ev[0])
 	}
 }
+
+// 回力镖普通攻击打对方一整排、每人 ×0.3、顺序照 BoomerangVsTbl（battle.c BATTLE_COM_BOOMERANG）。
+func TestBoomerangRow(t *testing.T) {
+	b := New(rnd(3))
+	a := player(0)
+	a.Weapon, a.AttackMin, a.AttackMax, a.Atk = data.ItemBoomerang, 1, 1, 300
+	b.F[0] = a
+	for i := 10; i < 15; i++ {
+		e := &Fighter{Slot: i, Level: 1, HP: 100000, MaxHP: 100000, Atk: 1, Def: 0, Quick: 1}
+		b.F[i] = e
+	}
+	b.F[12].HP = 0 // 倒下的跳过
+	var ev []Event
+	b.skillAttack(a, Command{Kind: Attack, Target: 13}, &ev)
+	var order []int
+	for _, e := range ev {
+		if e.Kind != Attack {
+			t.Fatalf("意外的事件 %+v", e)
+		}
+		order = append(order, e.Target)
+		if e.Shoot != 4 {
+			t.Fatalf("回力镖的事件 Shoot 应为 4，得到 %d", e.Shoot)
+		}
+	}
+	want := []int{14, 10, 11, 13}
+	if len(order) != len(want) {
+		t.Fatalf("飞行顺序应为 %v，得到 %v", want, order)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("飞行顺序应为 %v，得到 %v", want, order)
+		}
+	}
+	// 同样的乱数、同样的顺序各打一下（不打折）：回力镖的每一下应是它的 ×0.3
+	b2 := New(rnd(3))
+	a2 := player(0)
+	a2.Weapon, a2.AttackMin, a2.AttackMax, a2.Atk = data.ItemBoomerang, 1, 1, 300
+	b2.playerHits(a2) // skillAttack 先抽了一次攻击次数，乱数要对齐
+	for i, e := range ev {
+		if (i < len(ev)-1) != e.Combo {
+			t.Fatalf("第 %d 下的 Combo 应为 %v", i, i < len(ev)-1)
+		}
+		d := &Fighter{Slot: e.Target, Level: 1, HP: 100000, MaxHP: 100000, Atk: 1, Quick: 1}
+		full, _ := b2.attackOnce(a2, d, attackOpts{noCounter: true}, false)
+		if full.Result != e.Result || (full.Damage > 3 && e.Damage != int(float64(full.Damage)*0.3)) {
+			t.Fatalf("第 %d 下：回力镖 %v %d，不打折 %v %d", i, e.Result, e.Damage, full.Result, full.Damage)
+		}
+	}
+	// 目标在自己那一排（队友）：什么也不做
+	ev = nil
+	b.F[1] = player(1)
+	b.skillAttack(a, Command{Kind: Attack, Target: 1}, &ev)
+	if len(ev) != 1 || ev[0].Kind != None {
+		t.Fatalf("打自己那一排应为 None，得到 %+v", ev)
+	}
+}
+
+// 碎石器打中附加麻痹 1 回合；弓 / 投掷斧的事件带 Shoot 种类。
+func TestThrowWeapons(t *testing.T) {
+	b := New(rnd(5))
+	a := player(0)
+	a.Weapon, a.AttackMin, a.AttackMax, a.Atk, a.Level = data.ItemBreakThrow, 1, 1, 300, 50
+	d := &Fighter{Slot: 10, Level: 1, HP: 100000, MaxHP: 100000, Atk: 1, Quick: 1}
+	b.F[0], b.F[10] = a, d
+	got := false
+	for i := 0; i < 50 && !got; i++ {
+		var ev []Event
+		d.status = [stCount]int{}
+		b.skillAttack(a, Command{Kind: Attack, Target: 10}, &ev)
+		if ev[0].Shoot != 3 {
+			t.Fatalf("碎石器的 Shoot 应为 3，得到 %d", ev[0].Shoot)
+		}
+		if d.status[StParalysis] == 1 {
+			got = true
+		} else if d.status[StParalysis] != 0 {
+			t.Fatalf("麻痹应为 1 回合，得到 %d", d.status[StParalysis])
+		}
+	}
+	if !got {
+		t.Fatal("碎石器 50 次都没有附加麻痹")
+	}
+	for w, want := range map[int]int{data.ItemBow: 1, data.ItemBoundThrow: 2, data.ItemAxe: 0} {
+		a.Weapon = w
+		var ev []Event
+		b.skillAttack(a, Command{Kind: Attack, Target: 10}, &ev)
+		if ev[0].Shoot != want {
+			t.Fatalf("武器 %d 的 Shoot 应为 %d，得到 %d", w, want, ev[0].Shoot)
+		}
+	}
+}

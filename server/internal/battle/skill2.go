@@ -213,6 +213,7 @@ func (b *Battle) skill2(f *Fighter, c Command, ev *[]Event) bool {
 	case "PETSKILL_ToothCrushe":
 		// E啮齿术：打一下（不会反击），有伤害、没被光镜守挡掉时咬坏对方玩家的一件装备
 		first := len(*ev)
+		o.tooth = true
 		b.attackSeq(f, c.Target, o, ev)
 		for i := len(*ev) - 1; i >= first; i-- {
 			x := (*ev)[i]
@@ -346,6 +347,7 @@ func (b *Battle) flee(t *Fighter, ev *[]Event) {
 // （怯战 15%：宠物回去休息、其余离开战场；狂狮怒吼 命%：只对宠物，被叫回主人身边）。
 func (b *Battle) timid(f *Fighter, c Command, o attackOpts, ev *[]Event) {
 	first := len(*ev)
+	o.roar = c.Skill.Func != "PETSKILL_BattleTimid" // 狂狮怒吼：攻击者头上画 CG_ICON_ROAR
 	b.attackSeq(f, c.Target, o, ev)
 	t, dmg := b.lastHit(f, *ev, first)
 	if t == nil || !t.Alive() || dmg <= 1 {

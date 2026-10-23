@@ -13,7 +13,10 @@
   /* 两张画布的像素数由脚本跟着显示大小设定（ui.ts fitView / fitOverlay），一般不会再被浏览器缩放 */
   .stage canvas { display: block; width: 100%; aspect-ratio: 4 / 3; }
   #overlay { position: absolute; inset: 0; pointer-events: none; }
-  #hud { position: fixed; left: 4px; bottom: 2px; color: #9a9ca5; font-size: 12px; pointer-events: none; }
+  /* ?debug 的数据：独立一层盖在画面上面，自带深色底，不会被游戏的字和图盖住 */
+  #hud { position: fixed; left: 4px; bottom: 2px; z-index: 10; color: #d0d2da; font-size: 12px; line-height: 16px; white-space: pre;
+    background: rgba(0, 0, 0, 0.72); padding: 2px 6px; border-radius: 3px; pointer-events: none; }
+  #hud:empty { display: none; }
 </style>
 </head>
 <body>
@@ -22,6 +25,6 @@
   <canvas id="overlay" width="800" height="600"></canvas>
 </div>
 <div id="hud"></div>
-<script type="module" src="dist/main.js?v=mvku2tpo"></script>
+<script type="module" src="dist/main.js?v=mvlcmz3j"></script>
 </body>
 </html>

@@ -240,7 +240,11 @@ func TestPetLevelUp(t *testing.T) {
 	w.Do(func() {
 		p := w.players[id].pets.Pets[slot]
 		old := *p
-		ups := w.petGainExp(p, w.game.Battle.NextLevelExp(4))
+		need := 0 // 经验按级累计：1→5 级要四级各自所需的和
+		for l := 1; l < 5; l++ {
+			need += w.game.Battle.NextLevelExp(l)
+		}
+		ups := w.petGainExp(nil, p, need)
 		if ups != 4 || p.Level != 5 {
 			t.Fatalf("应升到 5 级：升了 %d 级，现在 %d 级", ups, p.Level)
 		}
@@ -378,5 +382,33 @@ func TestNursePetHeal(t *testing.T) {
 	p, _ := find[*proto.Pets](msgs)
 	if done, _ := find[*proto.NpcWindow](msgs); p == nil || p.Pets[0].HP != p.Pets[0].MaxHp || done == nil || !strings.Contains(done.Text, "已经没问题了") {
 		t.Fatalf("宠物应回复：%+v", msgs)
+	}
+}
+
+// rules.petDeathLoss：宠物倒下扣掉相当于升几级的成长（每项 (成长率 + 2.5) × 档次倍率中间值 × 倍数，不低于 1）；0 不扣。
+func TestPetDeathLoss(t *testing.T) {
+	w, db, _ := setup(t)
+	c, cl := petOwner(t, w, db, "loser", 30, 100)
+	id := int(c.ID)
+	p := &Pet{Name: "小龙", Level: 20, Vital: 5000, Str: 4000, Tgh: 3000, Dex: 2, Alloc: [4]int{120, 100, 80, 60}, Rank: 2}
+	w.Do(func() { w.petDeathLoss(w.players[id], p) })
+	if p.Vital != 5000 || p.Str != 4000 {
+		t.Fatalf("petDeathLoss 为 0 时不该扣：%+v", p)
+	}
+	w.Rules.PetDeathLoss = 2
+	w.Do(func() { w.petDeathLoss(w.players[id], p) })
+	f := float64(490+540) / 2 * 0.01
+	want := func(v, grow int) int { return v - int((float64(grow)+2.5)*f*2) }
+	if p.Vital != want(5000, 120) || p.Str != want(4000, 100) || p.Tgh != want(3000, 80) || p.Dex != 1 {
+		t.Fatalf("扣的量不对：%+v（想要 体 %d 腕 %d 耐 %d 敏 1）", p, want(5000, 120), want(4000, 100), want(3000, 80))
+	}
+	got := false
+	for _, m := range cl.take() {
+		if c, ok := m.(*proto.ChatMsg); ok && strings.Contains(c.Text, "成长减少") {
+			got = true
+		}
+	}
+	if !got {
+		t.Fatal("应提示成长减少")
 	}
 }

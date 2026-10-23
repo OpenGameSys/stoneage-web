@@ -2,16 +2,6 @@ NPCCREATE
 #### 从 serv/data-8.0/npc/eden1/init/eden81.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
 
 {
-name=打工名人克拉克
-floorid=5543
-borncenter=37,31,1,1
-dir=6
-createnum=1
-enemy=changeevent|file:add80/eden1/init/eden81_1
-graphicname=16116
-}
-
-{
 name=霍特雷敦
 floorid=5577
 borncenter=30,24,1,1

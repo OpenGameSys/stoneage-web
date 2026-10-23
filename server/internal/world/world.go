@@ -82,6 +82,7 @@ type entity struct {
 	questDirty       bool         // 任务旗标改过、任务日志还没重送（quest.go）
 	questSig         string       // 上次送出的任务日志签名（道具栏变动后比对，quest.go refreshQuests）
 	muteUntil        time.Time    // GM 的 /mute：这之前不能说话（不存档）
+	mind             int          // 留在头上的心情图示（CHAR_MIND_NUM：睡觉 / 咖啡 / 强调）
 	worldSentAt      time.Time    // 上次在世界频道说话（CHAR_WORKWORLDSENDTIME）
 	chatTokens       float64      // 说话的令牌桶（chatBurst 满、每秒回 chatPerSecond），刷屏的句子直接丢掉
 	chatAt           time.Time
@@ -107,11 +108,12 @@ func (e *entity) hidden() bool { return e.npc != nil && e.sprite == timeManHidde
 
 func (e *entity) info() proto.ObjInfo {
 	m := e.mark() // 头上的队长 / 战斗记号（CHAR_sendCharaAtWalk 补送的 CA）
-	return proto.ObjInfo{ID: e.id, Kind: e.kind, Name: e.name, Sprite: e.sprite, X: e.x, Y: e.y, Dir: e.dir, Level: e.level,
+	return proto.ObjInfo{ID: e.id, Kind: e.kind, Name: e.name, Sprite: e.sprite, X: e.x, Y: e.y, Dir: e.dir, Level: e.level, Mind: e.mind,
 		Leader: m.Leader, Battle: m.Battle, Help: m.Help, Action: e.act - 1, Family: e.fm.Name, Trade: m.Trade, Vendor: m.Vendor}
 }
 
 type World struct {
+	Name       string // 线路名（大区 + 线路，星球频道的 [星球X] 用）
 	game       *data.Game
 	db         store.Store
 	log        *slog.Logger
@@ -132,10 +134,11 @@ type World struct {
 	// Rules 是 config.yaml 的 rules（rules.go），开机时设定，之后只读
 	Rules Rules
 	// panics 是 safe 拦下的 panic 次数
-	panics   atomic.Int64
-	buses    []*entity         // 会走动的 NPC（bus.go tickBuses）
-	warPlace map[int]*warPlace // 对战场的位置（fmwar.go warPlaces，算一次）
-	qhints   map[int]string    // 事件编号 → 相关 NPC 的提示（quest.go questHints，算一次）
+	panics    atomic.Int64
+	buses     []*entity         // 会走动的 NPC（bus.go tickBuses）
+	warPlace  map[int]*warPlace // 对战场的位置（fmwar.go warPlaces，算一次）
+	qhints    map[int]string    // 事件编号 → 相关 NPC 的提示（quest.go questHints，算一次）
+	floorVers map[int]string    // 楼层资料的版本（floorVer，客户端拿它决定本机存的地图还能不能用）
 
 	// saves 是存档队列：由一个协程按顺序写库，保证同一角色的新存档不会被旧存档盖掉。
 	// enqueue 按 key 合并：同一个 key 还没写时只换掉要写的内容，不再排一笔（道具栏一秒动 40 次也只写一次），
@@ -307,8 +310,13 @@ func (w *World) drain() {
 }
 
 // Families 回传这条线路用的家族资料；ShareFamilies 让几条线路共用同一份（cmd/saserver 在 Run 之前设定）。
-func (w *World) Families() *Families       { return w.fam }
-func (w *World) ShareFamilies(f *Families) { w.fam = f }
+func (w *World) Families() *Families { return w.fam }
+func (w *World) ShareFamilies(f *Families) {
+	w.fam = f
+	f.mu.Lock()
+	f.worlds = append(f.worlds, w)
+	f.mu.Unlock()
+}
 
 // ---------------- 进入与离开 ----------------
 
@@ -341,7 +349,7 @@ func (w *World) Enter(c store.Character, cl Client) {
 		e.book = parseAddressBook(c.AddressBook)
 		e.fmc = parseFmChar(c.Family)
 		e.sprite = w.equipSprite(e)
-		e.fs = fsParty // 上线时组队开着（_ALWAYS_TEAM_OPEN），交易、名片关着（char.c CHAR_ISTRADE / ISTRADECARD = 0）
+		e.fs = fsParty | fsAllServ // 上线时组队开着（_ALWAYS_TEAM_OPEN），交易、名片关着（char.c CHAR_ISTRADE / ISTRADECARD = 0）；星球频道收得到
 		cl.Send(&proto.Self{ID: e.id, Name: e.name, Sprite: e.sprite})
 		w.famLogin(e) // ACFMCharLogin：F 状态、家族频道
 		cl.Send(&proto.Flags{Flags: e.fs})
@@ -481,6 +489,14 @@ func (w *World) walkSpeed() float64 {
 		return 1
 	}
 	return w.Rules.WalkSpeed
+}
+
+// battleSpeedPct 是 rules.battleSpeed 的百分比（BattleStart.speed，客户端 battle.ts 用它加速演出）。
+func (w *World) battleSpeedPct() int {
+	if w.Rules.BattleSpeed <= 0 {
+		return 100
+	}
+	return int(w.Rules.BattleSpeed*100 + 0.5)
 }
 
 // clientStepMs 是客户端自己走一格要用的毫秒数（EnterFloor.step）：原版 260 ms 除以速度倍数。
@@ -782,6 +798,7 @@ func (w *World) MapReq(charID, floor, x1, y1, x2, y2 int) {
 			}
 		}
 		md.Walk = string(walk)
+		md.Ver = w.floorVer(floor)
 		e.client.Send(md)
 	})
 }
@@ -822,6 +839,10 @@ func (w *World) Chat(charID int, channel, text string, color, area int) {
 		if color < 0 || color >= FontPalCount {
 			color = 0
 		}
+		if strings.HasPrefix(text, "/tell ") { // 密语（char_talk.c OneByOneTkChannel，_TELLCHANNEL）
+			w.tell(e, strings.TrimSpace(text[len("/tell "):]), color)
+			return
+		}
 		msg := &proto.ChatMsg{Channel: channel, FromID: e.id, From: e.name, Text: text, Color: color}
 		switch channel {
 		case "world":
@@ -847,6 +868,28 @@ func (w *World) Chat(charID int, channel, text string, color, area int) {
 			for _, p := range w.players {
 				p.client.Send(msg)
 			}
+		case "allserv":
+			// 星球频道（char_talk.c _ALL_SERV_SEND：转生、等级、声望门槛同世界频道的写法；原版经 AC 广播到所有 gmsv，这里是同一进程的所有线路）
+			r := w.Rules
+			switch {
+			case e.char.Trans < r.AllServTrans || e.char.Level < r.AllServLevel:
+				w.sysMsg(e, "您的转生等级未达到要求,暂不能使用星球频道!", colorRed)
+				return
+			case e.char.Fame < r.AllServFame:
+				w.sysMsg(e, fmt.Sprintf("您的声望不足%d，无法使用星球频道功能！", r.AllServFame), colorRed)
+				return
+			}
+			e.char.Fame -= r.AllServFame
+			if r.AllServFame > 0 {
+				w.saveProgress(e)
+			}
+			// saacproto_AllServSend_recv：所有线路的所有人都收到，颜色随机（rand() % CHAR_COLORNUM）
+			msg := &proto.ChatMsg{Channel: "allserv", Text: fmt.Sprintf("[星球%s] %s 说：%s", w.Name, e.name, text), Color: w.rnd.IntN(FontPalCount)}
+			w.fam.each(func(o *World) {
+				for _, p := range o.players {
+					p.client.Send(msg)
+				}
+			})
 		case "family": // 家族频道（客户端的 /FM）
 			w.familyChat(e, msg)
 		case "party":
@@ -963,6 +1006,34 @@ func (w *World) ReturnHome(charID int) {
 	})
 }
 
+// tell 是 OneByOneTkChannel（_CHANNEL_MODIFY）："/tell 名字 内容" 只说给这条线路上叫那个名字的人；对方关了密语频道回"X 关闭了此频道"，
+// 双方各看到"你告诉X：…" / "X告诉你：…"（P|M|）。找不到人时的那一句是 H5 加的（原版不回话）。
+func (w *World) tell(e *entity, rest string, color int) {
+	name, text, ok := strings.Cut(rest, " ")
+	text = strings.TrimSpace(text)
+	if !ok || name == "" || text == "" {
+		w.sysMsg(e, "用法：/tell 名字 内容", colorYellow)
+		return
+	}
+	var to *entity
+	for _, p := range w.players {
+		if p.name == name {
+			to = p
+			break
+		}
+	}
+	switch {
+	case to == nil:
+		w.sysMsg(e, fmt.Sprintf("找不到叫 %s 的人。", name), colorYellow)
+	case to == e:
+	case to.fs&fsTell == 0:
+		w.sysMsg(e, fmt.Sprintf("%s 关闭了此频道", name), color)
+	default:
+		w.sysMsg(e, fmt.Sprintf("你告诉%s：%s", name, text), color)
+		w.sysMsg(to, fmt.Sprintf("%s告诉你：%s", e.name, text), color)
+	}
+}
+
 // ---------------- 楼层与视野 ----------------
 
 func (w *World) addToFloor(e *entity) {
@@ -983,7 +1054,7 @@ func (w *World) placeOnFloor(e *entity, floor, x, y, dir int) {
 	e.floor, e.x, e.y, e.dir = floor, x, y, dir
 	w.addToFloor(e)
 	f := w.game.Floors[floor]
-	e.client.Send(&proto.EnterFloor{Floor: floor, Name: f.Name, Palette: f.Palette, Width: f.W, Height: f.H, X: x, Y: y, Dir: dir, Step: w.clientStepMs()})
+	e.client.Send(&proto.EnterFloor{Floor: floor, Name: f.Name, Palette: f.Palette, Width: f.W, Height: f.H, X: x, Y: y, Dir: dir, Step: w.clientStepMs(), MapVer: w.floorVer(floor)})
 	e.visible = map[int]bool{}
 	w.refreshView(e)
 	w.announce(e)

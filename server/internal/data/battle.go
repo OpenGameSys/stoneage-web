@@ -90,7 +90,7 @@ type BattleData struct {
 	Groups    map[int]*Group
 	Enemies   map[int]*Enemy
 	Temps     map[int]*EnemyTemp
-	LevelExp  []int          // exp.txt：LevelExp[n] = 升到 n 级所需的累计经验
+	LevelExp  []int          // exp.txt 逐行（第 n 行在 [n-1]）：原版 NeedLevelUpTbls[n] = 第 n 行，n 级升 n+1 级要 tbl[n+1] = LevelExp[n]；每级经验从 0 重新累计（CHAR_HandleExp）
 	BattleMap map[int][3]int // 地块图号 → 三个可选的战斗背景编号
 	Skills    map[int]*Skill // petskill2.txt
 	Magics    map[int]*Magic // magic.txt（咒术）
@@ -339,12 +339,13 @@ func (d *BattleData) AreaAt(floor, x, y int) *EncountArea {
 	return best
 }
 
-// NextLevelExp 返回 level 级升下一级所需的累计经验（CHAR_GetLevelExp(level+1)），满级返回 -1。
+// NextLevelExp 返回 level 级升下一级所需的经验（CHAR_GetLevelExp(level+1) = NeedLevelUpTbls[level+1]，即 exp.txt 第 level+1 行），
+// 这是本级从 0 累计的量（升级时扣掉，CHAR_HandleExp _NEWOPEN_MAXEXP）；满级返回 -1。
 func (d *BattleData) NextLevelExp(level int) int {
-	if level+1 >= len(d.LevelExp) || level < 0 {
+	if level >= len(d.LevelExp) || level < 0 {
 		return -1
 	}
-	return d.LevelExp[level+1]
+	return d.LevelExp[level]
 }
 
 // enemyBaseExp 是 gmsv/include/enemyexptbl.h 的 enemybaseexptbl（按等级 1 起）。

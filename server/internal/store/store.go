@@ -107,6 +107,9 @@ type Store interface {
 	DeleteFamily(ctx context.Context, id int) error
 	// 其他整个世界共用的资料（庄园表、家族之间的留言板等）
 	GetKV(ctx context.Context, key string) (string, error)
+	// AllCharacters 列出所有没删除的角色（开机时换算旧存档用）；SaveExpPets 只写回经验与宠物栏
+	AllCharacters(ctx context.Context) ([]Character, error)
+	SaveExpPets(ctx context.Context, charID int64, exp int, pets string) error
 	PutKV(ctx context.Context, key, value string) error
 	PutMail(ctx context.Context, to int64, body string) error
 	TakeMails(ctx context.Context, to int64) ([]string, error)
@@ -387,6 +390,28 @@ func (s *sqliteStore) SavePosition(ctx context.Context, charID int64, floor, x, 
 
 func (s *sqliteStore) AddLogin(ctx context.Context, charID int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE characters SET logins = logins + 1 WHERE id = ?`, charID)
+	return err
+}
+
+func (s *sqliteStore) AllCharacters(ctx context.Context) ([]Character, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+charCols+` FROM characters WHERE deleted = 0 ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Character{}
+	for rows.Next() {
+		c, err := scanChar(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *sqliteStore) SaveExpPets(ctx context.Context, charID int64, exp int, pets string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE characters SET exp=?, pets=? WHERE id = ?`, exp, pets, charID)
 	return err
 }
 
