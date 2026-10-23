@@ -1148,13 +1148,14 @@ func (b *Battle) criDamage(a, d *Fighter) int {
 	return b.damage(a, d) + int(float64(d.Def)*lv*0.5)
 }
 
-// guardAdjust 是 BATTLE_GuardAdjust：防御时伤害随机减为 0%..50%。
+// guardAdjust 是 BATTLE_GuardAdjust：原版防御时伤害随机减为 0%..50%（25% 的机会完全挡掉）。
+// H5 改成只减伤、不会完全格挡：原版 0% 的那一档改成 10%，而且至少 1 点（AllGuard 只剩破除防御等特殊情况会出现）。
 func (b *Battle) guardAdjust(dmg int) int {
 	r := b.randi(1, 100)
 	rate := 0.5
 	switch {
 	case r <= 25:
-		rate = 0
+		rate = 0.1
 	case r <= 50:
 		rate = 0.1
 	case r <= 70:
@@ -1164,7 +1165,7 @@ func (b *Battle) guardAdjust(dmg int) int {
 	case r <= 95:
 		rate = 0.4
 	}
-	return int(float64(dmg) * rate)
+	return max(1, int(float64(dmg)*rate))
 }
 
 // attrAdjust 是 BATTLE_AttrAdjust + BATTLE_AttrCalc：地水火风与"无"属性（100 − 四属性之和）互相克制。

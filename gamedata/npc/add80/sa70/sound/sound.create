@@ -1,0 +1,26 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/sa70/sound/sound.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=盖尔
+floorid=3400
+borncenter=63,43
+dir=6
+ignoreinvincible=1
+createnum=1
+graphicname=16017
+enemy=changeevent|file:add80/sa70/sound/sound1.arg
+}
+
+{
+name=洛克侨
+floorid=8006
+borncenter=22,17
+dir=4
+time=1
+ignoreinvincible=1
+createnum=1
+enemy=sb_dou|file:add80/sa70/sound/sound2.arg
+graphicname=101574
+}
+

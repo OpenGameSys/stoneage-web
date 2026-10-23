@@ -23,6 +23,7 @@ rules:
   expRate: 1              # 战斗经验倍率
   shareExp: true          # 经验共享：战斗结束时还在场的人物、出战宠物、骑宠都拿一样多的经验；false 是原版的谁打倒谁拿
   dropRate: 1             # 战利品机率倍率
+  walkSpeed: 1            # 走路速度倍数（0.25..4，1 是原版）
   encounterRate: 1        # 遇敌机率倍率（0 不会遇敌）
   turnTime: 30            # 每回合选指令的秒数（5..300）
   levelUpPoints: 3        # 人物每升一级的加点

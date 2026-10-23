@@ -53,6 +53,11 @@ func (s TileSet) Walkable(f *Floor, x, y int) bool {
 		return false
 	}
 	i := y*f.W + x
+	if f.Tiles[i] == 0 && f.Objs[i] == 0 {
+		// 没画任何东西的格子（地图里的黑色区域）：mapset.txt 把图号 0 列成可走，原版服务端也就放行，玩家能走进室内地图的黑色部分；
+		// 这里当作不可走（H5 的差异）。地块是 0 但有物件的（桥、边缘的装饰）照 mapset 的物件规则
+		return false
+	}
 	switch s[int(f.Objs[i])].Walkable {
 	case 1:
 		return s[int(f.Tiles[i])].Walkable == 1

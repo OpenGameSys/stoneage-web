@@ -77,8 +77,8 @@ export class QuestWindow {
   tracking(): QuestEntry[] { return this.quests.filter((q) => this.tracked.has(q.id) && !isDone(q)); }
 
   /** 地图画面右上角（楼层名下面）：追踪中的任务与提示 */
-  hud(ui: Ui) {
-    let y = 88;
+  hud(ui: Ui, top = 88) {
+    let y = top;
     for (const q of this.tracking().slice(0, HUD_MAX)) {
       const t = `◆ ${q.name}`;
       ui.text(792 - measure(t), y, t, FONT.YELLOW); y += 17;

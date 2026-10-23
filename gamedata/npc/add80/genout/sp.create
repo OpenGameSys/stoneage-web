@@ -1,0 +1,15 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/genout/sp.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+floorid=7012
+borncorner=6,4,6,4
+time=0
+createnum=1
+dir=4
+ignoreinvincible=1
+graphicname=16322
+name=莉雅
+enemy=npcgen_savepoint|file:add80/genout/sp_7012_6_4
+}
+

@@ -145,7 +145,7 @@
       ["hp", "int"], ["maxHp", "int"], ["mp", "int"], ["maxMp", "int"], ["atk", "int"], ["def", "int"], ["agi", "int"],
       ["charm", "int"], ["dp", "int"], ["vital", "int"], ["str", "int"], ["tgh", "int"], ["dex", "int"],
       ["attrs", "int[]"], ["hometown", "int"], ["trans", "int"], ["points", "int"]],
-    "EnterFloor": [["floor", "int"], ["name", "string"], ["palette", "int"], ["width", "int"], ["height", "int"], ["x", "int"], ["y", "int"], ["dir", "int"]],
+    "EnterFloor": [["floor", "int"], ["name", "string"], ["palette", "int"], ["width", "int"], ["height", "int"], ["x", "int"], ["y", "int"], ["dir", "int"], ["step", "int"]],
     "MapData": [["floor", "int"], ["x1", "int"], ["y1", "int"], ["x2", "int"], ["y2", "int"], ["tiles", "int[]"], ["objs", "int[]"], ["walk", "string"]],
     "NpcList": [["floor", "int"], ["npcs", "NpcPos[]"]],
     "PosCorrect": [["x", "int"], ["y", "int"], ["dir", "int"]],

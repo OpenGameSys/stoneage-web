@@ -1,0 +1,14 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/sa70/honor/honor.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=ブ焊
+floorid=5100
+borncenter=36,29
+dir=4
+ignoreinvincible=1
+createnum=1
+graphicname=16057
+enemy=changeevent|file:add80/sa70/honor/honor1.arg
+}
+

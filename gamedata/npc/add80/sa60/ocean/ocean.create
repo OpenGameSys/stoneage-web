@@ -1,0 +1,14 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/sa60/ocean/ocean.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=宫本蚊帐
+floorid=817
+borncenter=241,264
+dir=2
+ignoreinvincible=1
+createnum=1
+graphicname=101542
+enemy=sb_ganzo|file:add80/sa60/ocean/rogue.arg
+}
+

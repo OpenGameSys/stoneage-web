@@ -119,6 +119,7 @@ type World struct {
 	floors     map[int]map[int]*entity // 楼层 → 实体
 	players    map[int]*entity         // 角色 ID → 实体
 	mergeCache []mergeTarget           // 能加工出来的道具（merge.go，第一次加工时建立）
+	towns      []gmTown                // GM /town2 的村庄清单（记录点 / 长老的位置，开机建）
 	now        func() time.Time
 	rnd        *rand.Rand
 	// groundSeq 编地上物的 id（groundIDBase 起）；ticks 是时钟跳了几次（5 秒一次）
@@ -190,6 +191,7 @@ func New(game *data.Game, db store.Store, log *slog.Logger, seed int64) *World {
 		}
 	}
 	w.updateTimeMen()
+	w.towns = gmTowns(game)
 	return w
 }
 
@@ -352,7 +354,7 @@ func (w *World) Enter(c store.Character, cl Client) {
 		w.deliverStoredMails(e)      // MessageFlush
 		w.returnAwayPets(e)
 		if e.gm {
-			cl.Send(&proto.GmMenu{Items: gmMenu})
+			cl.Send(&proto.GmMenu{Items: w.gmMenuItems()})
 		}
 		w.log.Info("上线", "char", e.name, "floor", e.floor, "x", e.x, "y", e.y, "gm", e.gm)
 	})
@@ -473,11 +475,23 @@ func (w *World) Move(charID, x, y, dir int) {
 	})
 }
 
-// takeStepToken 是简单的令牌桶：平均不快于 MinStepGap 一步，允许 StepBurst 步的突发。
+// walkSpeed 是 rules.walkSpeed（没设或不合理就 1）。
+func (w *World) walkSpeed() float64 {
+	if w.Rules.WalkSpeed <= 0 {
+		return 1
+	}
+	return w.Rules.WalkSpeed
+}
+
+// clientStepMs 是客户端自己走一格要用的毫秒数（EnterFloor.step）：原版 260 ms 除以速度倍数。
+func (w *World) clientStepMs() int { return int(260/w.walkSpeed() + 0.5) }
+
+// takeStepToken 是简单的令牌桶：平均不快于 MinStepGap / walkSpeed 一步，允许 StepBurst 步的突发。
 func (w *World) takeStepToken(e *entity) bool {
 	now := w.now()
 	if !e.lastStep.IsZero() {
-		e.stepTokens = min(StepBurst, e.stepTokens+float64(now.Sub(e.lastStep))/float64(MinStepGap))
+		gap := time.Duration(float64(MinStepGap) / w.walkSpeed())
+		e.stepTokens = min(StepBurst, e.stepTokens+float64(now.Sub(e.lastStep))/float64(gap))
 	}
 	e.lastStep = now
 	if e.stepTokens < 1 {
@@ -969,7 +983,7 @@ func (w *World) placeOnFloor(e *entity, floor, x, y, dir int) {
 	e.floor, e.x, e.y, e.dir = floor, x, y, dir
 	w.addToFloor(e)
 	f := w.game.Floors[floor]
-	e.client.Send(&proto.EnterFloor{Floor: floor, Name: f.Name, Palette: f.Palette, Width: f.W, Height: f.H, X: x, Y: y, Dir: dir})
+	e.client.Send(&proto.EnterFloor{Floor: floor, Name: f.Name, Palette: f.Palette, Width: f.W, Height: f.H, X: x, Y: y, Dir: dir, Step: w.clientStepMs()})
 	e.visible = map[int]bool{}
 	w.refreshView(e)
 	w.announce(e)

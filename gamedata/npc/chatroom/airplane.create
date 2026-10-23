@@ -56,3 +56,15 @@ graphicname=100259
 name=加美航空
 enemy=airplane|file:chatroom/airplane4.arg
 }
+
+#######加美航空 奇努伊～米兰达（H5 补的：原版数据只有两边的站牌与向导，没有这架飞机）##########
+{
+floorid=6000
+borncenter=40,78,1,1
+movecenter=40,78,40,78
+createnum=1
+dir=2
+graphicname=100259
+name=加美航空
+enemy=airplane|file:chatroom/airplane6.arg
+}

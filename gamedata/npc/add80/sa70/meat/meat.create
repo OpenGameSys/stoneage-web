@@ -1,0 +1,14 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/sa70/meat/meat.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=贝丝安娜
+floorid=1000
+borncenter=77,118
+dir=5
+ignoreinvincible=1
+createnum=1
+graphicname=16022
+enemy=changeevent|file:add80/sa70/meat/meat1.arg
+}
+

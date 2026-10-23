@@ -1,0 +1,15 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/family/npc/familyshop4.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+floorid=4030
+borncorner=49,28,49,28
+time=0
+createnum=1
+dir=4
+ignoreinvincible=1
+graphicname=16100
+name=通行证贩卖员
+enemy=npcgen_shop|file:add80/family/npc/shop4_5
+}
+

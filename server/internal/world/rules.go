@@ -24,6 +24,8 @@ type Rules struct {
 	BusStep time.Duration
 	// VendorTax 是摆摊卖出时抽的税（百分比；setup.cf STREETVENDORPOINT 的第一项是石币摊位的税率，原版 0）
 	VendorTax int
+	// WalkSpeed 是玩家走路速度的倍数（1 = 原版：服务端两步最少隔 MinStepGap、客户端一格 260 ms）；服务端的步频限制与客户端的步长都按它缩放
+	WalkSpeed float64
 }
 
 // DefaultRules 是原版的规则，另外经验共享预设开着。
@@ -31,7 +33,7 @@ func DefaultRules() Rules {
 	return Rules{ExpRate: 1, ShareExp: true, DropRate: 1, EncounterRate: 1, TurnTime: TurnTime, LevelUpPoints: LevelUpPoints,
 		GroundItem: itemDeleteTime, GroundPet: petDeleteTime, GroundGold: goldDeleteTime, FamilyFee: fmFee,
 		NoEscapeFloors: []int{12345, 142, 40001, 40002, 40003, 40004, 40005, 40006, 40007, 40008, 40009, 40010, 8252, 8253, 8254, 8256},
-		WorldTrans:     5, WorldLevel: MaxLevel, WorldFame: 1, BusStep: busLoopTime}
+		WorldTrans:     5, WorldLevel: MaxLevel, WorldFame: 1, BusStep: busLoopTime, WalkSpeed: 1}
 }
 
 // scaleExp 乘上经验倍率（至少 1，打倒了就有经验）。

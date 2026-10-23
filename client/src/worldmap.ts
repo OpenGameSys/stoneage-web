@@ -11,6 +11,7 @@
 import type { Assets } from "./assets.ts";
 import type { Field, FloorView } from "./field.ts";
 import { FONT, measure, type Ui } from "./ui.ts";
+import { settings, saveSettings } from "./menus.ts";
 
 type Rgb = [number, number, number] | null;
 
@@ -103,6 +104,7 @@ export interface MapHost {
   assets: Assets;
   root: string;
   field(): Field | null;
+  walkTo(x: number, y: number): void; // 点地图上的格子：自动寻路走过去（Field.target）
 }
 
 const ZOOMS = [2, 3, 4, 6, 8, 12, 16]; // 一格的半宽（像素）；格子菱形半高是它的 3/4（画面 64×48 的比例）
@@ -112,6 +114,7 @@ const LIST_W = 150, LIST_ROWS = 14, LIST_ROW_H = 20;
 const MAP_X = X + 26 + LIST_W + 8, MAP_Y = Y + 66;
 const MAP_W = W * 64 - (26 + LIST_W + 8) - 26, MAP_H = H * 48 - 66 - 58;
 const BG = "#0a0f1c";
+const MINI_W = 160, MINI_H = 112, MINI_ZOOM = 1; // 右上角小地图：160×112，一格 3 像素
 
 export class MapWindow {
   private host: MapHost;
@@ -126,6 +129,9 @@ export class MapWindow {
   private base: HTMLCanvasElement;
   private marks: HTMLCanvasElement;
   private drawn = "";
+  private mini: HTMLCanvasElement;      // 右上角小地图的底图
+  private drawnMini = "";
+  private pressInside = false;          // 地图上按下了（放开时没拖动就算点格子）
   private seenCache = new Map<number, { version: number; count: number; bounds: [number, number, number, number] | null }>();
 
   constructor(host: MapHost) {
@@ -133,6 +139,7 @@ export class MapWindow {
     this.colors = new TileColors(host.assets, host.root);
     this.base = document.createElement("canvas"); this.base.width = MAP_W; this.base.height = MAP_H;
     this.marks = document.createElement("canvas"); this.marks.width = MAP_W; this.marks.height = MAP_H;
+    this.mini = document.createElement("canvas"); this.mini.width = MINI_W; this.mini.height = MINI_H;
   }
 
   /** 打开时回到自己那一层、跟着自己 */
@@ -172,6 +179,8 @@ export class MapWindow {
     if (tool("＋", "map-in")) this.zoom = Math.min(ZOOMS.length - 1, this.zoom + 1);
     if (tool("全图", "map-fit") && view) this.fit(view);
     if (tool("回到自己", "map-me", this.follow && current)) { this.floor = -1; this.follow = true; }
+    if (tool("小地图", "map-mini", settings.minimap)) { settings.minimap = !settings.minimap; saveSettings(); }
+    if (ui.hovered("map-mini")) ui.bottomLine = "在画面右上角常显一张跟着自己的小地图。";
     if (ui.hovered("map-fit")) ui.bottomLine = "按看过的范围缩放到整张图。";
     if (ui.hovered("map-me")) ui.bottomLine = "回到自己所在的区域，跟着自己移动；拖动地图就不跟了。";
     // 左边：去过的区域
@@ -207,7 +216,7 @@ export class MapWindow {
       ui.pic(this.marks, MAP_X, MAP_Y);
       ui.hitBox(MAP_X, MAP_Y, MAP_X + MAP_W, MAP_Y + MAP_H, "map-area", false);
     }
-    ui.text(x + 28, y + H * 48 - 36, this.hoverNpc ? `NPC：${this.hoverNpc}` : "按住拖动平移　亮青色：传送点　白点：玩家　黄点：NPC（滑鼠停上去看名字）　方框：现在画面看到的范围", this.hoverNpc ? FONT.YELLOW : FONT.GRAY);
+    ui.text(x + 28, y + H * 48 - 36, this.hoverNpc ? `NPC：${this.hoverNpc}` : "点格子走过去　拖动平移　青：传送点　白：玩家　黄：NPC（停上去看名字）　框：画面范围", this.hoverNpc ? FONT.YELLOW : FONT.GRAY);
     if (ui.text(x + W * 64 - 28 - measure("关　闭"), y + H * 48 - 36, "关　闭", FONT.AQUA, "map-close")) close();
   }
 
@@ -217,6 +226,23 @@ export class MapWindow {
   private pan(ui: Ui, view: FloorView) {
     const m = ui.mouse;
     const inside = m.x >= MAP_X && m.x < MAP_X + MAP_W && m.y >= MAP_Y && m.y < MAP_Y + MAP_H;
+    if (m.clicked && inside) this.pressInside = true; // clicked 在按下的那一帧为真（按下与放开可能在同一帧内，看 down 会漏掉）
+    if (!m.down && this.pressInside) { // 放开：没拖动过就是点格子 → 走过去（只对自己这一层）
+      this.pressInside = false;
+      const f = this.host.field();
+      if (!this.dragged && inside && f && view.floor === f.floor) {
+        const s = ZOOMS[this.zoom], hy = s * 0.75;
+        const a = (m.x - MAP_X - MAP_W / 2) / s, b = (m.y - MAP_Y - MAP_H / 2) / hy; // a = dx + dy、b = dy − dx
+        const gx = Math.round(this.cx + (a - b) / 2), gy = Math.round(this.cy + (a + b) / 2);
+        // 点到的格子不能走（墙、物件）就找 3 格内最近的能走的格子
+        let best: [number, number] | null = null, bd = 99;
+        for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+          const x = gx + dx, y = gy + dy, d = Math.abs(dx) + Math.abs(dy);
+          if (d < bd && x >= 0 && y >= 0 && x < view.w && y < view.h && f.canEnter(x, y)) { best = [x, y]; bd = d; }
+        }
+        if (best) this.host.walkTo(best[0], best[1]);
+      }
+    }
     if (m.down && (this.drag || inside)) {
       if (this.drag) {
         const dpx = m.x - this.drag.x, dpy = m.y - this.drag.y;
@@ -264,23 +290,55 @@ export class MapWindow {
 
   /** 格子中心在地图画布上的位置 */
   private toPx(view: FloorView, x: number, y: number): [number, number] {
-    const s = ZOOMS[this.zoom], hy = s * 0.75;
-    return [MAP_W / 2 + ((x - this.cx) + (y - this.cy)) * s, MAP_H / 2 + ((y - this.cy) - (x - this.cx)) * hy];
+    return toPxAt(x, y, this.cx, this.cy, ZOOMS[this.zoom], MAP_W, MAP_H);
   }
 
   /** 底图：看过的格子（地块 + 物件）与传送点；视野、资料、颜色没变就不重画 */
   private render(view: FloorView, f: Field) {
-    const s = ZOOMS[this.zoom], hy = s * 0.75;
     const key = `${view.floor},${Math.round(this.cx * 4)},${Math.round(this.cy * 4)},${this.zoom},${view.version},${view.seenVersion},${this.colors.version}`;
     if (key === this.drawn) return;
     this.drawn = key;
-    const ctx = this.base.getContext("2d")!;
+    this.paint(this.base.getContext("2d")!, view, f, this.cx, this.cy, ZOOMS[this.zoom], MAP_W, MAP_H);
+  }
+
+  /** 右上角常显的小地图（settings.minimap）：跟着自己，画在 (x, y)，MINI_W×MINI_H */
+  miniFrame(x: number, y: number) {
+    const ui = this.host.ui, f = this.host.field();
+    const me = f?.self;
+    if (!f || !me || f.floor < 0) return;
+    const view = f.floorView(f.floor);
+    if (!view) return;
+    const key = `${view.floor},${me.x},${me.y},${view.version},${view.seenVersion},${this.colors.version}`;
+    if (key !== this.drawnMini) { this.drawnMini = key; this.paint(this.mini.getContext("2d")!, view, f, me.x, me.y, ZOOMS[MINI_ZOOM], MINI_W, MINI_H); }
+    ui.pic(this.mini, x, y);
+    ui.box(x - 1, y - 1, x + MINI_W + 1, y + MINI_H + 1, "rgba(255,255,255,0.35)", false);
+    const s = ZOOMS[MINI_ZOOM];
+    for (const a of f.actors.values()) { // 玩家白点、NPC 黄点（自己不在 actors 里，另画）
+      if (a === me) continue;
+      const [px, py] = toPxAt(a.x, a.y, me.x, me.y, s, MINI_W, MINI_H);
+      if (px < 2 || py < 2 || px > MINI_W - 2 || py > MINI_H - 2) continue;
+      ui.box(x + px - 2, y + py - 2, x + px + 2, y + py + 2, a.kind === "player" ? "#ffffff" : "#ffd84a", true);
+    }
+    // 自己：画布中央的金点加黑边、朝向短线（和地图窗口一样的记号，小一号）
+    const mx = x + MINI_W / 2, my = y + MINI_H / 2;
+    ui.box(mx - 4, my - 4, mx + 4, my + 4, "#1a1200", true);
+    ui.box(mx - 3, my - 3, mx + 3, my + 3, "#ffcc33", true);
+    const d = [[-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]][me.dir] ?? [0, 1];
+    const vx = (d[0] + d[1]), vy = (d[1] - d[0]) * 0.75, len = Math.hypot(vx, vy) || 1;
+    const ex = mx + vx / len * 9, ey = my + vy / len * 9;
+    ui.box(Math.min(mx, ex) - 1, Math.min(my, ey) - 1, Math.max(mx, ex) + 1, Math.max(my, ey) + 1, "rgba(255,242,176,0.9)", true);
+  }
+
+  /** 把看过的格子（地块 + 物件）与传送点画进 ctx（w×h，中心 (cx, cy)，一格半宽 s）；地图窗口与小地图共用 */
+  private paint(ctx: CanvasRenderingContext2D, view: FloorView, f: Field, cx: number, cy: number, s: number, MAP_W: number, MAP_H: number) {
+    const hy = s * 0.75;
+    const toPx = (x: number, y: number) => toPxAt(x, y, cx, cy, s, MAP_W, MAP_H);
     ctx.fillStyle = BG;
     ctx.fillRect(0, 0, MAP_W, MAP_H);
     // 范围：画布边缘往外多一格
     const R = MAP_W / 2 / s + MAP_H / 2 / hy + 3;
-    const x1 = Math.max(0, Math.floor(this.cx - R)), x2 = Math.min(view.w - 1, Math.ceil(this.cx + R));
-    const y1 = Math.max(0, Math.floor(this.cy - R)), y2 = Math.min(view.h - 1, Math.ceil(this.cy + R));
+    const x1 = Math.max(0, Math.floor(cx - R)), x2 = Math.min(view.w - 1, Math.ceil(cx + R));
+    const y1 = Math.max(0, Math.floor(cy - R)), y2 = Math.min(view.h - 1, Math.ceil(cy + R));
     f.requestFloor(view, x1, y1, x2 + 1, y2 + 1);
     const inView = (px: number, py: number) => px > -s && px < MAP_W + s && py > -hy && py < MAP_H + hy;
     const cell = (px: number, py: number, c: [number, number, number]) => {
@@ -296,7 +354,7 @@ export class MapWindow {
       for (let x = x1; x <= x2; x++) {
         const k = y * view.w + x;
         if (!view.seen[k] || !view.walk[k]) continue;
-        const [px, py] = this.toPx(view, x, y);
+        const [px, py] = toPx(x, y);
         if (!inView(px, py)) continue;
         const c = this.colors.color(view.tiles[k]);
         if (c) cell(px, py, c);
@@ -312,7 +370,7 @@ export class MapWindow {
       const [tx, ty] = this.host.assets.footprint(o);
       const dark: [number, number, number] = [Math.round(c[0] * 0.85), Math.round(c[1] * 0.85), Math.round(c[2] * 0.85)];
       for (let k = 0; k < ty; k++) for (let l = 0; l < tx; l++) {
-        const [px, py] = this.toPx(view, x + l, y - k);
+        const [px, py] = toPx(x + l, y - k);
         if (inView(px, py)) cell(px, py, k === 0 && l === 0 ? c : dark);
       }
     }
@@ -390,6 +448,11 @@ export class MapWindow {
     ctx.strokeStyle = "#fff2b0"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx + vx / len * 11, my + vy / len * 11); ctx.stroke();
   }
+}
+
+/** 格子 → 画布像素：等角菱形，px = (X+Y)s、py = (Y−X)·0.75s，中心 (cx, cy) 落在画布中央 */
+function toPxAt(x: number, y: number, cx: number, cy: number, s: number, w: number, h: number): [number, number] {
+  return [w / 2 + ((x - cx) + (y - cy)) * s, h / 2 + ((y - cy) - (x - cx)) * s * 0.75];
 }
 
 function clip(text: string, maxW: number): string {

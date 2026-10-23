@@ -1,0 +1,14 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/sa70/coin/coin.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=皮洛
+floorid=3300
+borncenter=65,68
+dir=6
+ignoreinvincible=1
+createnum=1
+graphicname=16220
+enemy=changeevent|file:add80/sa70/coin/coin1.arg
+}
+

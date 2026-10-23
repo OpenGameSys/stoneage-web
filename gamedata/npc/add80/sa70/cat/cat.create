@@ -1,0 +1,15 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/sa70/cat/cat.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=柯西
+floorid=2000
+borncenter=62,33
+dir=4
+time=0
+ignoreinvincible=1
+createnum=1
+enemy=npcgen_warpman|file:add80/sa70/cat/cat.arg
+graphicname=16084
+}
+

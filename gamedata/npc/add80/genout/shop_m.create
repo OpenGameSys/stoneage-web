@@ -1,0 +1,27 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/genout/shop_m.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+floorid=2005
+borncorner=8,1,8,1
+time=0
+createnum=1
+graphicname=16024
+name=玛丽娜丝的医生
+dir=4
+ignoreinvincible=1
+enemy=npcgen_man|file:add80/genout/msg_2005_18_7
+}
+
+{
+floorid=2006
+borncorner=21,15,21,15
+time=0
+createnum=1
+graphicname=16001
+name=玛丽娜丝的村长
+dir=4
+ignoreinvincible=1
+enemy=changeevent|file:add80/genout/msg_2006_20_14
+}
+

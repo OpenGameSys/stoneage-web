@@ -1,0 +1,14 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/sa70/crisis/crisis.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=凯丽
+floorid=2000
+borncenter=64,77
+dir=6
+ignoreinvincible=1
+createnum=1
+graphicname=16096
+enemy=changeevent|file:add80/sa70/crisis/crisis1.arg
+}
+

@@ -608,16 +608,20 @@ class FieldScreen implements Screen {
   openCount() { return this.menus.openCount() + (this.panel.etcOpen ? 1 : 0); }
 
   private savedBgmTried = false;
+  private bgmMarker = -1; // 现在播的背景音乐是哪个记号来的（还看得到它就不换曲）
   frame(now: number) {
     const f = field;
     if (!f) return;
     // 地图的声音记号：背景音乐（40..55）与环境音（20..37）
     const mk = f.soundMarkers(now);
     const bgmKey = `sa.bgm.${selfStatus?.name ?? ""}`;
-    if (mk.bgm >= 0) {
-      audio.mapBgm(MAP_BGM[mk.bgm]);
+    // 两个区域的记号同时看得到时（边界附近），原版每走几步就换一次曲子（淡出再从头播）；这里现在播的那个记号还看得到就不换（H5 加的滞后）
+    const marker = this.bgmMarker >= 0 && mk.bgms.includes(this.bgmMarker) ? this.bgmMarker : mk.bgm;
+    if (marker >= 0) {
+      this.bgmMarker = marker;
+      audio.mapBgm(MAP_BGM[marker]);
       // 原版把最后看到的记号存在 map\bgm<格位>.dat，进游戏时附近没有记号就用它（只认 40..53）
-      if (mk.bgm <= 53) try { localStorage.setItem(bgmKey, String(mk.bgm)); } catch { /* */ }
+      if (marker <= 53) try { localStorage.setItem(bgmKey, String(marker)); } catch { /* */ }
     } else if (!this.savedBgmTried && f.floor >= 0) {
       this.savedBgmTried = true;
       let saved = 0;
@@ -751,7 +755,8 @@ class FieldScreen implements Screen {
     const s = f.self;
     if (s && !this.menus.items.open && !this.menus.mapOpen && !this.menus.actions.open && !this.menus.vendor.open) {
       ui.text(792 - measure(`${f.floorName}  ${s.x},${s.y}`), 68, `${f.floorName}  ${s.x},${s.y}`, FONT.WHITE);
-      if (!this.menus.windowOpen() && !modal) this.menus.quests.hud(ui); // 追踪中的任务
+      if (settings.minimap && !this.menus.windowOpen() && !modal) this.menus.mapWnd.miniFrame(792 - 160, 88); // 右上角小地图（地图窗口里开关）
+      if (!this.menus.windowOpen() && !modal) this.menus.quests.hud(ui, settings.minimap ? 88 + 112 + 8 : 88); // 追踪中的任务
     }
     ui.bottomLineY = 558; // 任务栏常驻在 576..600
     this.menus.frame();

@@ -1,0 +1,14 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/sa70/closed/closed.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=皮尔克
+floorid=817
+borncenter=269,116
+dir=6
+ignoreinvincible=1
+createnum=1
+graphicname=101548
+enemy=changeevent|file:add80/sa70/closed/closed1.arg
+}
+

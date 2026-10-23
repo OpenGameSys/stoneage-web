@@ -1,0 +1,14 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/eden3/princess/princess.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=歇子任务
+floorid=7215
+borncenter=25,5
+dir=4
+createnum=1
+ignoreinvincible=1
+enemy=changeevent|file:add80/eden3/princess/tori1
+graphicname=16544
+}
+

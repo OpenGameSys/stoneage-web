@@ -117,7 +117,7 @@ export interface S2CCharListResult { t: "CharListResult"; chars: CharSummary[]; 
 export interface S2CCharCreateResult { t: "CharCreateResult"; ok: boolean; message: string; id: number; }
 export interface S2CSelf { t: "Self"; id: number; name: string; sprite: number; }
 export interface S2CStatus { t: "Status"; name: string; face: number; level: number; exp: number; nextExp: number; hp: number; maxHp: number; mp: number; maxMp: number; atk: number; def: number; agi: number; charm: number; dp: number; vital: number; str: number; tgh: number; dex: number; attrs: number[]; hometown: number; trans: number; points: number; }
-export interface S2CEnterFloor { t: "EnterFloor"; floor: number; name: string; palette: number; width: number; height: number; x: number; y: number; dir: number; }
+export interface S2CEnterFloor { t: "EnterFloor"; floor: number; name: string; palette: number; width: number; height: number; x: number; y: number; dir: number; step: number; }
 export interface S2CMapData { t: "MapData"; floor: number; x1: number; y1: number; x2: number; y2: number; tiles: number[]; objs: number[]; walk: string; }
 export interface S2CNpcList { t: "NpcList"; floor: number; npcs: NpcPos[]; }
 export interface S2CPosCorrect { t: "PosCorrect"; x: number; y: number; dir: number; }

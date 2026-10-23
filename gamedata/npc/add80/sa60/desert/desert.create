@@ -1,0 +1,15 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/sa60/desert/desert.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=塔可登
+floorid=1400 
+borncenter=98,104
+dir=6
+time=0
+ignoreinvincible=1
+createnum=1
+enemy=changeevent|file:add80/sa60/desert/desert1.arg
+graphicname=16103
+}
+

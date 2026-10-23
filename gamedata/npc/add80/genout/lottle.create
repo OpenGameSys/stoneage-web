@@ -1,0 +1,27 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/genout/lottle.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+floorid=7003
+borncorner=14,13,14,13
+time=0
+createnum=1
+dir=4
+ignoreinvincible=1
+graphicname=16315
+name=彩卷兑换员
+enemy=npcgen_shop|file:add80/genout/ss_7002_32_38.arg
+}
+
+{
+floorid=7005
+borncorner=7,26,7,26
+time=0
+createnum=1
+dir=4
+ignoreinvincible=1
+graphicname=16315
+name=彩卷兑换员
+enemy=npcgen_shop|file:add80/genout/ss_7005_7_26.arg
+}
+

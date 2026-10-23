@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"sa/server/internal/battle"
 	"sa/server/internal/data"
@@ -35,6 +37,8 @@ var gmMenu = []proto.GmItem{
 	{Group: "移动", Cmd: "/where", Name: "现在位置", Hint: "楼层编号、名字、座标、是不是遇敌区域、这层有几个人"},
 	{Group: "移动", Cmd: "/town", Name: "回村子", Args: []string{"村子"}, Kinds: []string{"opt:萨姆吉尔|玛丽娜丝|加加|卡鲁它那"}, Defaults: []string{"萨姆吉尔"},
 		Hint: "传送到四个出身村落的村长家"},
+	{Group: "移动", Cmd: "/town2", Name: "传送 2", Args: []string{"村庄"}, Kinds: []string{"opt:"}, Defaults: []string{""}, // 选项在 gmMenuItems 里按记录点填
+		Hint: "传送到任一村庄的复活点（记录点 / 长老的位置，清单由记录点 NPC 的资料列出）"},
 	{Group: "角色", Cmd: "/lv", Name: "设定等级", Args: []string{"等级"}, Kinds: []string{""}, Defaults: []string{"$level"}, Hint: "经验也改成那一级的起点（1..140）"},
 	{Group: "角色", Cmd: "/exp", Name: "增加经验", Args: []string{"经验"}, Kinds: []string{""}, Defaults: []string{"10000"}, Hint: "照常升级、加点、加魅力"},
 	{Group: "角色", Cmd: "/points", Name: "可分配点数", Args: []string{"点数"}, Kinds: []string{""}, Defaults: []string{"10"}, Hint: "升级加点用的点数（状态窗口里分配）"},
@@ -641,6 +645,24 @@ func (w *World) gmCommand(e *entity, text string) bool {
 		}
 		reply("%s", w.gmFamily(e, f[1], n))
 
+	case "/town2": // /town2 村庄：传送到那个村庄的复活点（gmTowns）
+		name := strings.Join(f[1:], "") // 指令按空格切开了：村名里的空格（"漆黑的洞窟 地下7楼"）两边都去掉再比
+		i := slices.IndexFunc(w.towns, func(t gmTown) bool { return strings.ReplaceAll(t.name, " ", "") == name })
+		if i < 0 {
+			names := make([]string, len(w.towns))
+			for k, t := range w.towns {
+				names[k] = t.name
+			}
+			reply("用法：/town2 村庄；村庄有：%s", strings.Join(names, "、"))
+			return true
+		}
+		if e.fight != nil {
+			reply("战斗中不能传送")
+			return true
+		}
+		h := w.towns[i].at
+		w.placeOnFloor(e, h.Floor, h.X, h.Y, e.dir)
+		reply("传送到 %s 的复活点 (%d,%d)", w.towns[i].name, h.X, h.Y)
 	case "/town":
 		towns := []string{"萨姆吉尔", "玛丽娜丝", "加加", "卡鲁它那"}
 		i := slices.Index(towns, strings.Join(f[1:], ""))
@@ -943,4 +965,122 @@ func (w *World) floorPlayers(floor int) int {
 		}
 	}
 	return n
+}
+
+// gmTown 是 GM /town2 的一个目的地：村庄名（复活点所在楼层的名字）与位置。
+type gmTown struct {
+	name string
+	at   data.Hometown
+}
+
+// gmTowns 列出所有村庄的复活点：先是 data.Game.Elders（char_data.c 的 elders[] 初值 + 每个记录点 NPC 的 Born），
+// 按长老编号排序、同一个位置只列一次，名字用那一层楼的名字（重名就加上编号）；
+// 再补上名字像村庄 / 城镇（结尾是 村、城、园、渔村，不是民房 / 店 / 医院 / 庄园 / 地下 / 回忆里的那种）而且有 NPC、却没有记录点的楼层
+// （奇努伊村、达那村、蒙达村、伊甸园、弗烈顿火城、亚伊欧风城……），落点是护士 / 道具店 / 村民之一的旁边。
+func gmTowns(game *data.Game) []gmTown {
+	ids := make([]int, 0, len(game.Elders))
+	for id := range game.Elders {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	var out []gmTown
+	seen := map[data.Hometown]bool{}
+	names := map[string]int{}
+	for _, id := range ids {
+		h := game.Elders[id]
+		if seen[h] || game.Floors[h.Floor] == nil {
+			continue
+		}
+		seen[h] = true
+		name := cleanFloorName(game.Floors[h.Floor].Name) // 有的楼层名尾巴带坏字节
+		if name == "" {
+			name = fmt.Sprintf("楼层%d", h.Floor)
+		}
+		names[name]++
+		if names[name] > 1 {
+			name = fmt.Sprintf("%s%d", name, names[name])
+		}
+		out = append(out, gmTown{name: name, at: h})
+	}
+	// 没有记录点的村庄 / 城镇：按楼层编号
+	floors := make([]int, 0, len(game.Floors))
+	for id := range game.Floors {
+		floors = append(floors, id)
+	}
+	slices.Sort(floors)
+	listed := map[int]bool{}
+	for _, t := range out {
+		listed[t.at.Floor] = true
+	}
+	for _, id := range floors {
+		name := cleanFloorName(game.Floors[id].Name)
+		if listed[id] || !townLikeName(name) || len(game.NPCs[id]) == 0 {
+			continue
+		}
+		n := townAnchorNPC(game.NPCs[id])
+		if n == nil {
+			continue
+		}
+		at := data.Hometown{Floor: id, X: n.X, Y: n.Y}
+		if f := game.Floors[id]; game.Tiles.Walkable(f, n.X, n.Y+1) {
+			at.Y++ // 站到 NPC 前面一格
+		}
+		names[name]++
+		if names[name] > 1 {
+			name = fmt.Sprintf("%s%d", name, names[name])
+		}
+		listed[id] = true
+		out = append(out, gmTown{name: name, at: at})
+	}
+	return out
+}
+
+// cleanFloorName 去掉楼层名尾巴的坏字节与空白。
+func cleanFloorName(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return r == utf8.RuneError || !unicode.IsGraphic(r) || unicode.IsSpace(r) })
+}
+
+// townLikeName：名字像一个村庄 / 城镇本身（不是它里面的某间房子或别的时代的回忆）。
+func townLikeName(name string) bool {
+	for _, bad := range []string{"家", "店", "医院", "民房", "庄园", "地下", "通路", "年前", "宿舍", "官邸", "训练", "游乐", "园区", "大陆", "柜台", "聊天", "PK", "道场", "事务所", "大厅"} {
+		if strings.Contains(name, bad) {
+			return false
+		}
+	}
+	for _, suf := range []string{"村", "城", "园", "渔村"} {
+		if strings.HasSuffix(name, suf) {
+			return true
+		}
+	}
+	return false
+}
+
+// townAnchorNPC 挑落点旁边的 NPC：护士 > 记录点 > 道具店 > 传送员 > 村民 > 随便一个。
+func townAnchorNPC(npcs []data.NPC) *data.NPC {
+	for _, fn := range []string{"WindowHealer", "SavePoint", "ItemShop", "WarpMan", "TownPeople", ""} {
+		for i := range npcs {
+			if (fn == "" || npcs[i].Function == fn) && npcs[i].Name != "" {
+				return &npcs[i]
+			}
+		}
+	}
+	return nil
+}
+
+// gmMenuItems 是送给 GM 的指令选单：gmMenu 加上开机才知道的选项（/town2 的村庄清单）。
+func (w *World) gmMenuItems() []proto.GmItem {
+	items := slices.Clone(gmMenu)
+	for i := range items {
+		if items[i].Cmd == "/town2" {
+			names := make([]string, len(w.towns))
+			for k, t := range w.towns {
+				names[k] = t.name
+			}
+			items[i].Kinds = []string{"opt:" + strings.Join(names, "|")}
+			if len(names) > 0 {
+				items[i].Defaults = []string{names[0]}
+			}
+		}
+	}
+	return items
 }

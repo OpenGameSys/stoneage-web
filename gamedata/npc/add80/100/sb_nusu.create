@@ -1,0 +1,14 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/100/sb_nusu.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+floorid=10705
+borncenter=44,41,1,1
+movecenter=20,20,100,100
+createnum=1
+dir=4
+graphicname=100230
+name=后添疾风的咪雅
+enemy=sb_n3|file:add80/100/sb_nusu3.arg
+}
+

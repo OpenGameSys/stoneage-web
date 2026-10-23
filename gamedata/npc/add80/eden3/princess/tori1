@@ -1,0 +1,40 @@
+#### 奶妈多莉 ####
+NomalMainMsg:你在干什么呢？没我需要的东西啊~
+
+####232任务中 对话 ####
+EventNo:-1
+TYPE:MESSAGE
+EVENT:LV>134&ENDEV=232
+NomalWindowMsg:真的衷心祝愿青蛙国的王子能够成功！！！！
+EventEnd
+
+###232完成 带着发恰和画像 收走 给眼泪###
+EventNo:232
+TYPE:ACCEPT
+EVENT:LV>134&NOWEV=232&ITEM=21143&ITEM=21145
+AcceptMsg1:你真的找回了小公主的发卡，太好了！
+AcceptMsg2:我把发卡给了小公主后，她果然感激得落泪了，我把你的事情转告给她之后，她让我把这滴眼泪交给你。
+ThanksMsg1:真的衷心祝愿青蛙国的王子能够成功！！！！
+ItemFullMsg:你道具已经满了，我的东西不能给你...
+DelItem:21143,21145
+GetItem:21146*1
+EndSetFlg:232
+EventEnd
+
+#### 232任务中 对话 ####
+EventNo:-1
+TYPE:MESSAGE
+EVENT:LV>134&NOWEV=232
+NomalWindowMsg:还不快去找呀？不想要公主的眼泪了吗？公主都快急死了！！！！！
+EventEnd
+
+###接任务（开标232）###
+EventNo:232
+TYPE:REQUEST
+EVENT:LV>134
+RequestMsg1:你说什么？你需要我们小公主的眼泪，可是我们的小公主很少有流泪的时候。
+RequestMsg2:不过近来小公主为了找寻她丢失的发卡很是着急，如果你能帮她找到失落的发卡的话，说不定她会感动的流泪。
+ThanksMsg1:据说小公主最后看到他发卡的地方，是在北岛的「柯尔克村」，然后便不知去向了。这个是公主小的时候，带着那个发卡的画像，你可以去找找看噢！
+ItemFullMsg:身上道具太多了喔！
+GetItem:21143
+EventEnd

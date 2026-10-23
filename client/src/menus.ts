@@ -55,11 +55,12 @@ export interface Settings {
   hideOthers: boolean; // 人物屏蔽开关
   autoBattle: boolean; // 自动战斗（原版 AI_SELECT）
   quickBattle: boolean; // 快速战斗（额外新功能）：不进战斗画面，照战斗设定自动打完
+  minimap: boolean;    // 右上角常显小地图（额外新功能，地图窗口里开关）
 }
 
 const DEFAULTS: Settings = {
   chatLines: 6, chatColor: 0, voice: 3, bgmVolume: 15, bgmPitches: {}, seVolume: 15,
-  stereo: true, mute: false, smoothCursor: false, hideOthers: false, autoBattle: false, quickBattle: false,
+  stereo: true, mute: false, smoothCursor: false, hideOthers: false, autoBattle: false, quickBattle: false, minimap: false,
 };
 const KEY = "sa.settings";
 
@@ -188,7 +189,7 @@ export class Menus {
       ui, canvas: host.canvas, send: (t) => host.gmSend(t), list: (k) => host.gmList(k), detail: (k, id) => host.gmDetail(k, id), place: () => host.place(),
       status: () => host.status, pets: () => (this.pets?.pets ?? []).filter((p) => p.slot >= 0 && p.slot < 5).sort((a, b) => a.slot - b.slot),
     });
-    this.mapWnd = new MapWindow({ ui, assets: host.assets, root: host.root, field: () => host.field() });
+    this.mapWnd = new MapWindow({ ui, assets: host.assets, root: host.root, field: () => host.field(), walkTo: (x, y) => { const f = host.field(); if (f) f.target = [x, y]; } });
     this.vendor = new VendorWindow({
       ui, canvas: host.canvas, items: () => this.items.inv.items, pets: () => this.pets?.pets ?? [], ridePet: () => this.pets?.ride ?? -1,
       gold: () => this.items.inv.gold, send: (cmd, title = "", kinds = [], slots = [], prices = []) => host.vendor(cmd, title, kinds, slots, prices),

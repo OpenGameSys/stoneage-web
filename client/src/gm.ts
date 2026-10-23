@@ -26,6 +26,7 @@ const PICK_TITLE: Record<string, string> = { item: "选择道具", enemy: "选�
 const PLAYERS_TAB = "玩家";
 const HIST_TAB = "记录";
 const PLAYER_ROWS = 14;
+const OPT_ROWS = 3; // 选项（opt: / 宠物）一页最多几行
 const HIST_KEY = "sa.gm.history";
 const HIST_MAX = 300;
 const HIST_ROWS = 14;
@@ -43,6 +44,7 @@ export class GmWindow {
   private sel = 0;                         // items 的下标
   private boxes: (InputBox | null)[] = []; // 每个参数一个；选项与宠物没有输入框
   private vals: string[] = [];             // 选项与宠物的值
+  private optPage: Record<number, number> = {}; // 选项太多时（/town2 的村庄）每个参数翻到第几页
   private lists = new Map<string, GmEntry[]>();
   private picker: { arg: number; kind: string; page: number; search: InputBox; filter: string } | null = null;
   // 清单的详情（GmDetail）：kind:id → 图与文字；hover 是最后停着的那一项
@@ -139,6 +141,7 @@ export class GmWindow {
       $earth: attr(0), $water: attr(1), $fire: attr(2), $wind: attr(3),
     };
     this.vals = [];
+    this.optPage = {};
     (it.args ?? []).forEach((_, k) => {
       const kind = it.kinds?.[k] ?? "", d = it.defaults?.[k] ?? "", v = subst[d] ?? d;
       if (argMode(kind) === "text") {
@@ -163,10 +166,21 @@ export class GmWindow {
   }
 
   private argRows(kind: string): number {
-    const opts = this.options(kind);
-    let w = 0, rows = 1;
-    for (const [, label] of opts) { const lw = measure(label) + 14; if (w + lw > 290) { rows++; w = 0; } w += lw; }
-    return rows;
+    const lines = this.optLines(kind);
+    if (lines.length === 0) return 1; // 打字的参数（/warp 的楼层 x y）一行一个
+    return Math.min(lines.length, OPT_ROWS) + (lines.length > OPT_ROWS ? 1 : 0); // 超过 OPT_ROWS 行就分页，多一行放翻页
+  }
+
+  /** 把选项排成每行最宽 290 像素的几行（每项宽 = 文字 + 14） */
+  private optLines(kind: string): [string, string][][] {
+    const lines: [string, string][][] = [[]];
+    let w = 0;
+    for (const o of this.options(kind)) {
+      const lw = measure(o[1]) + 14;
+      if (w + lw > 290 && lines[lines.length - 1].length) { lines.push([]); w = 0; }
+      lines[lines.length - 1].push(o); w += lw;
+    }
+    return lines[0].length ? lines : [];
   }
 
   /** 选项（[值, 显示]）：opt: 的固定选项，或自己的宠物 */
@@ -457,16 +471,24 @@ export class GmWindow {
       if (hit && kind !== "player") ui.text(x + 412, by, hit.name.length > 9 ? hit.name.slice(0, 9) + "…" : hit.name, FONT.AQUA);
       return;
     }
-    const opts = this.options(kind);
-    if (opts.length === 0) { ui.text(x + 250, by, kind === "pet" ? "（没有宠物）" : "", FONT.GRAY); return; }
-    let ox = x + 250, oy = by;
-    opts.forEach(([v, text]) => {
-      const w = measure(text) + 14;
-      if (ox + w > x + 250 + 290) { ox = x + 250; oy += 30; }
-      const on = this.vals[k] === v;
-      if (on) ui.box(ox - 3, oy - 3, ox + w - 9, oy + 17, "rgba(255,216,74,0.25)", true);
-      if (ui.text(ox, oy, text, on ? FONT.YELLOW : FONT.WHITE, `gm-o${k}-${v}`)) this.vals[k] = v;
-      ox += w;
+    const lines = this.optLines(kind);
+    if (lines.length === 0) { ui.text(x + 250, by, kind === "pet" ? "（没有宠物）" : "", FONT.GRAY); return; }
+    const pages = Math.ceil(lines.length / OPT_ROWS), page = Math.min(pages - 1, this.optPage[k] ?? 0);
+    lines.slice(page * OPT_ROWS, (page + 1) * OPT_ROWS).forEach((line, row) => {
+      let ox = x + 250;
+      const oy = by + row * 30;
+      for (const [v, text] of line) {
+        const w = measure(text) + 14, on = this.vals[k] === v;
+        if (on) ui.box(ox - 3, oy - 3, ox + w - 9, oy + 17, "rgba(255,216,74,0.25)", true);
+        if (ui.text(ox, oy, text, on ? FONT.YELLOW : FONT.WHITE, `gm-o${k}-${v}`)) this.vals[k] = v;
+        ox += w;
+      }
     });
+    if (pages > 1) { // 翻页行：◀ 第 n / m 页 ▶（选中的在哪一页也写出来）
+      const py = by + OPT_ROWS * 30, sel = lines.findIndex((l) => l.some(([v]) => v === this.vals[k]));
+      if (page > 0 && ui.text(x + 250, py, "◀", FONT.YELLOW, `gm-op${k}-`)) this.optPage[k] = page - 1;
+      ui.text(x + 280, py, `第 ${page + 1} / ${pages} 页` + (sel >= 0 && Math.floor(sel / OPT_ROWS) !== page ? `　（选的在第 ${Math.floor(sel / OPT_ROWS) + 1} 页）` : ""), FONT.GRAY);
+      if (page < pages - 1 && ui.text(x + 250 + 270, py, "▶", FONT.YELLOW, `gm-op${k}+`)) this.optPage[k] = page + 1;
+    }
   }
 }

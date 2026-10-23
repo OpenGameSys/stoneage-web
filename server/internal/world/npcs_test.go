@@ -19,7 +19,14 @@ func findNPC(t *testing.T, w *World, fn, key string) *entity {
 	w.Do(func() {
 		for _, es := range w.floors {
 			for _, e := range es {
+				// 补进来的 8.0 NPC（gamedata/npc/add80）可能用同名参数文件、内容却不同：测试要的是原数据那个，add80 的只当备胎
 				if e.npc != nil && e.npc.Function == fn && (strings.Contains(strings.Join(e.npc.Args, "|"), key) || strings.Contains(e.npc.Arg, key)) {
+					if strings.Contains(strings.Join(e.npc.Args, "|"), "add80/") {
+						if found == nil {
+							found = e
+						}
+						continue
+					}
 					found = e
 					return
 				}

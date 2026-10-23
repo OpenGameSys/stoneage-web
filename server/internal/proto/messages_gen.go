@@ -954,6 +954,7 @@ type EnterFloor struct {
 	X       int    `json:"x"`
 	Y       int    `json:"y"`
 	Dir     int    `json:"dir"`
+	Step    int    `json:"step"`
 }
 
 func (*EnterFloor) MsgType() string { return "EnterFloor" }

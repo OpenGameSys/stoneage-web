@@ -1155,7 +1155,7 @@ export class BattleScreen {
     for (const a of group) {
       const [x, y, w, h] = a.rect!;
       if (a.f.slot !== hot) ui.box(x, y, x + w, y + h, boxColor(), false);
-      ui.texts.push({ x: a.x, y: y - 16, text: `${a.f.name} LV${a.f.level}`, color: FONT.WHITE, align: "center" });
+      if (a.f.slot < 10) ui.texts.push({ x: a.x, y: y - 16, text: `${a.f.name} LV${a.f.level}`, color: FONT.WHITE, align: "center" }); // 敌人头上常显名字，滑过时不再画一次（会重影）
     }
   }
 
@@ -1234,10 +1234,7 @@ export class BattleScreen {
     for (const a of this.fighters.values()) {
       if (a.f.slot < 10 || a.dead || a.gone || a.hidden || !a.rect) continue;
       const [x, y, w, h] = a.rect, id = `t-${a.f.slot}`;
-      if (ui.hitBox(x, y, x + w, y + h, id)) {
-        const label = `${a.f.name} LV${a.f.level}`;
-        ui.texts.push({ x: a.x, y: y - 16, text: label, color: FONT.WHITE, align: "center" });
-      }
+      ui.hitBox(x, y, x + w, y + h, id); // 敌人头上本来就常显名字与等级（drawFighters），滑过时不再画一次，否则两行叠在一起像重影
       if (ui.clicked(id)) {
         const kind = this.capturing ? "capture" : "attack";
         this.lastButton = kind; this.capturing = false;
@@ -1354,7 +1351,7 @@ export class BattleScreen {
     for (const a of this.fighters.values()) {
       if (!ok(a.f.slot) || a.dead || a.gone || a.hidden || !a.rect) continue;
       const [x, y, w, h] = a.rect, id = `pt-${a.f.slot}`;
-      if (ui.hitBox(x, y, x + w, y + h, id)) ui.texts.push({ x: a.x, y: y - 16, text: `${a.f.name} LV${a.f.level}`, color: FONT.WHITE, align: "center" });
+      if (ui.hitBox(x, y, x + w, y + h, id) && a.f.slot < 10) ui.texts.push({ x: a.x, y: y - 16, text: `${a.f.name} LV${a.f.level}`, color: FONT.WHITE, align: "center" }); // 敌人头上常显名字，不重画
       if (ui.clicked(id)) { this.sendPet(this.petSkill, a.f.slot); return; }
     }
   }

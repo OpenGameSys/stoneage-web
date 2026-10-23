@@ -1,0 +1,14 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/sa70/weapon/weapon.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=莫非
+floorid=3200
+borncenter=45,44
+dir=4
+ignoreinvincible=1
+createnum=1
+graphicname=16128
+enemy=changeevent|file:add80/sa70/weapon/weapon.arg
+}
+

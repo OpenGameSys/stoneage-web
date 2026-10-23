@@ -11,7 +11,8 @@ import type { ObjInfo, S2CEnterFloor, S2CMapData, NpcPos } from "./proto.gen.ts"
 import type { Quad } from "./renderer.ts";
 
 export const MOVE: [number, number][] = [[-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
-export const STEP_MS = 260;   // 每走一格的时长；服务端最短 200ms，留出余量
+export let STEP_MS = 260;     // 自己每走一格的时长；原版 260 ms（服务端最短 200 ms，留出余量），服务端按 rules.walkSpeed 缩放后在 EnterFloor.step 送来
+export function setStepMs(ms: number) { if (ms >= 50 && ms <= 2000) STEP_MS = ms; }
 const VIEW = 15;              // 请求地图的半径
 const CG_INVISIBLE = 99;      // 小于等于该值的地块 / 物件编号不绘制（map.cpp drawMap：tile > CG_INVISIBLE 才画；含 20..59 的声音记号、60..79 的事件标记）
 
@@ -265,6 +266,7 @@ export class Field {
     if (this.floor >= 0) this.cache.set(this.floor, { name: this.floorName, tiles: this.tiles, objs: this.objs, walk: this.walk, seen: this.seen, version: this.mapVersion, seenVersion: this.seenVersion });
     this.floor = m.floor; this.floorName = m.name; this.palette = m.palette;
     this.width = m.width; this.height = m.height;
+    if (m.step > 0) setStepMs(m.step);
     this.loadMeta();
     this.meta.set(m.floor, { name: m.name, w: m.width, h: m.height });
     this.saveMeta();
@@ -546,6 +548,7 @@ export class Field {
    * 传送点只能作为终点，避免路过时被传走。
    */
   findPath(sx: number, sy: number, tx: number, ty: number, limit = 40): number[] {
+    limit = Math.max(limit, 4 * Math.max(Math.abs(tx - sx), Math.abs(ty - sy))); // 世界地图点的远目标：深度跟着距离放大
     const W = this.width, key = (x: number, y: number) => y * W + x;
     const prev = new Map<number, [number, number]>(); // 格 → [上一格, 方向]
     const start = key(sx, sy);
@@ -593,14 +596,14 @@ export class Field {
    * 范围是自己附近的 37×37 格（gx − 20 .. gx + 16、gy − 16 .. gy + 20，原版读进来的地图范围，不只是画面）。
    * 背景音乐记号有好几格时，原版最后看到的那格算数：画面上最上面、同一排最左边的那格。
    */
-  soundMarkers(now: number, W = 800, H = 600): { bgm: number; env: { marker: number; x: number; y: number }[] } {
-    const out = { bgm: -1, env: [] as { marker: number; x: number; y: number }[] };
+  soundMarkers(now: number, W = 800, H = 600): { bgm: number; bgms: number[]; env: { marker: number; x: number; y: number }[] } {
+    const out = { bgm: -1, bgms: [] as number[], env: [] as { marker: number; x: number; y: number }[] };
     const s = this.self;
     if (!s || this.floor < 0) return out;
     const [px, py] = s.pos(now);
     const cx = W / 2, cy = H / 2 + 24;
     const gx = Math.round(px), gy = Math.round(py);
-    let best: [number, number] | null = null;
+    // 背景音乐记号：原版 drawMap 按 y 再 x 扫过读进来的地图，每个记号都调 play_map_bgm，最后一个（y 最大、再 x 最大）算数
     for (let y = Math.max(0, gy - 16); y < Math.min(this.height, gy + 21); y++) {
       for (let x = Math.max(0, gx - 20); x < Math.min(this.width, gx + 17); x++) {
         const k = y * this.width + x;
@@ -608,7 +611,7 @@ export class Field {
         const ex = cx + (x - px + (y - py)) * 32, ey = cy + (y - py - (x - px)) * 24;
         for (const v of [this.tiles[k], this.objs[k]]) {
           if (v >= 20 && v <= 37) out.env.push({ marker: v, x: ex, y: ey });
-          else if (v >= 40 && v <= 55 && (!best || ey < best[0] || ey === best[0] && ex < best[1])) { best = [ey, ex]; out.bgm = v; }
+          else if (v >= 40 && v <= 55) { out.bgm = v; if (!out.bgms.includes(v)) out.bgms.push(v); }
         }
       }
     }

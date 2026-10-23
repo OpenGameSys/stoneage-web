@@ -1,0 +1,13 @@
+NPCCREATE
+#### 从 serv/data-8.0/npc/poru/hero.create 补的（h5 原本没有的 NPC；参数文件在 add80/ 下）####
+
+{
+name=萨姆吉尔
+floorid=8020
+borncenter=20,13,1,1
+dir=4
+createnum=1
+enemy=changeevent|file:add80/poru/asamugiru
+graphicname=100036
+}
+
