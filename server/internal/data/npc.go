@@ -16,6 +16,7 @@ type Warp struct {
 	Floor, X, Y       int
 	ToFloor, ToX, ToY int
 	Source            string
+	Free              string // npc_warp.c 的 FREEMORE（_NEW_WARPPOINT）：按条件挑目的地的参数；空的就是固定传到 To*
 }
 
 // NPC 是 .create 文件中的一个摆放块（npcgen）。Dir 已换成客户端方向。
@@ -46,7 +47,7 @@ var npcFunctions = map[string]string{"npcgen_man": "TownPeople", "npcgen_signboa
 	"windowman": "Windowman", "npcgen_savepoint": "SavePoint", "npcgen_timeman": "TimeMan",
 	"npcgen_shop": "ItemShop", "npcgen_limitshop": "ItemShop", "npcgen_poolitemshop": "PoolItemShop",
 	"npcgen_dengon": "Dengon", "bankman": "Bankman", "npcgen_charm": "Charm", "luckyman": "LuckyMan", "npcgen_janken": "Janken",
-	"bus": "Bus", "airplane": "Airplane"}
+	"bus": "Bus", "airplane": "Airplane", "npc_transmigration": "Transmigration"}
 
 // Implemented 是已经做了对话的 functionset（名字照原版 npc/*.c 的 NPC_<名字>Talked）。
 var Implemented = map[string]bool{"TownPeople": true, "SignBoard": true, "WindowHealer": true, "Healer": true, "WarpMan": true,
@@ -54,7 +55,8 @@ var Implemented = map[string]bool{"TownPeople": true, "SignBoard": true, "Window
 	"Charm": true, "LuckyMan": true, "Janken": true, "ExChangeMan": true, "NPCEnemy": true, "Quiz": true,
 	"ItemchangeMan": true, "Mic": true, "Action": true, "PetShop": true, "PetSkillShop": true, "Riderman": true, "Duelranking": true,
 	"Familyman": true, "FmDengon": true, "FmLetter": true, "FmHealer": true,
-	"Bus": true, "Airplane": true, "ManorSman": true, "Scheduleman": true, "FMWarpMan": true, "FMPKMan": true, "FMPKCallMan": true}
+	"Bus": true, "Airplane": true, "ManorSman": true, "Scheduleman": true, "FMWarpMan": true, "FMPKMan": true, "FMPKCallMan": true,
+	"Transmigration": true}
 
 // loadTemplates 读 npc 目录下所有 .template（npctemplate.c）：模板名 → functionset。
 func loadTemplates(dir string) map[string]string {
@@ -126,7 +128,7 @@ func LoadMapWarps(path string) ([]Warp, error) {
 		if len(from) < 3 || len(to) < 3 {
 			continue
 		}
-		out = append(out, Warp{from[0], from[1], from[2], to[0], to[1], to[2], "mapwarp.txt"})
+		out = append(out, Warp{from[0], from[1], from[2], to[0], to[1], to[2], "mapwarp.txt", ""})
 	}
 	return out, nil
 }
@@ -160,6 +162,8 @@ func LoadNPCs(dir string) ([]NPC, error) {
 			}
 			if ok {
 				n.Function, n.Text, n.Arg = fn, resolveArg(dir, n.Args), argString(dir, n.Args)
+			} else if n.Type == "npcgen_warp" { // 参数写在档案里的传送点（FREEMORE）
+				n.Arg = argString(dir, n.Args)
 			}
 			if n.Function == "Windowman" || n.Function == "Bankman" || n.Function == "Riderman" || n.Function == "Familyman" || n.Function == "FmLetter" { // NPC_BankmanInit、NPC_RidermanInit 读一样格式的设定档
 				// NPC_WindowmanInit：参数的 conff 指定设定档；读不到时这个 NPC 不做（原版初始化失败）
@@ -243,6 +247,11 @@ func npcFrom(kv map[string]string, source string) (NPC, bool) {
 func NPCWarps(npcs []NPC) []Warp {
 	var out []Warp
 	for _, n := range npcs {
+		if n.Type == "npcgen_warp" && strings.Contains(n.Arg, "FREEMORE") {
+			// NPC_WarpWarpCharacter 的 FREEMORE：踩上去时才按条件挑目的地（world.freeWarpDest）；都不成立就传回这一格
+			out = append(out, Warp{n.Floor, n.X, n.Y, n.Floor, n.X, n.Y, n.Source, n.Arg})
+			continue
+		}
 		if n.Type != "npcgen_warp" || len(n.Args) < 3 {
 			continue
 		}
@@ -252,7 +261,7 @@ func NPCWarps(npcs []NPC) []Warp {
 		if e1 != nil || e2 != nil || e3 != nil {
 			continue
 		}
-		out = append(out, Warp{n.Floor, n.X, n.Y, fl, x, y, n.Source})
+		out = append(out, Warp{n.Floor, n.X, n.Y, fl, x, y, n.Source, ""})
 	}
 	return out
 }

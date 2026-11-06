@@ -122,6 +122,8 @@ func (w *World) NpcWindowReply(charID, npcID, seq, button int, data string) {
 			w.petShopReply(p, n, win, button, data)
 		case "PetSkillShop":
 			w.petSkillShopReply(p, n, data)
+		case "Transmigration":
+			w.transReply(p, n, win, button, data)
 		}
 	})
 }

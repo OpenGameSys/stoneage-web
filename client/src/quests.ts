@@ -16,7 +16,8 @@ export interface QuestHost {
 }
 
 const W = 8, H = 8;         // 窗口 512×384
-const X = (800 - W * 64) / 2, Y = 84;
+const X = 16, Y = 84;       // 靠左放，右边留给任务的详细说明框（DW 格宽）
+const DW = 4, DX = X + W * 64 + 8; // 说明框 256 宽，放在任务窗口右边
 const PAGE = 10, ROW = 24;
 const HUD_MAX = 4;          // 右上角最多列几项
 const SE_ACCEPT = 202, SE_DONE = 211;
@@ -99,9 +100,11 @@ export class QuestWindow {
     ui.window(x, y, W, H, "quest-wnd");
     rects.push([x, y, x + W * 64, y + H * 48]);
     const list = this.tab === 0 ? this.quests : this.available, avail = this.tab === 1;
+    let hover = null as QuestEntry | null; // 在 forEach 里设，as 免得 TS 把它收窄成 null
     const pages = Math.max(1, Math.ceil(list.length / PAGE));
-    // 分页：我的任务（原版的任务查询）/ 可接任务（额外新功能：现在找 NPC 就能接的委托）
-    (["我的任务", `可接任务（${this.available.length}）`] as const).forEach((t, k) => {
+    // 分页：我的任务（原版的任务查询）/ 可接任务（额外新功能：现在找 NPC 就能接的委托在前；还差前置的"未满足"排在后面，灰字）
+    const canTake = this.available.filter((q) => q.state === "可接").length;
+    (["我的任务", `可接任务（${canTake}）`] as const).forEach((t, k) => {
       if (ui.text(x + 28 + k * 110, y + 16, k === this.tab ? `【${t}】` : `　${t}　`, k === this.tab ? FONT.YELLOW : FONT.AQUA, `quest-tab${k}`) && k !== this.tab) { this.tab = k; this.page = 0; }
     });
     const sub = `共 ${list.length} 项　第 ${this.page + 1} / ${pages} 页`;
@@ -111,11 +114,13 @@ export class QuestWindow {
     ui.box(x + 24, y + 62, x + W * 64 - 24, y + 63, "rgba(255,255,255,0.25)", true);
     if (list.length === 0) ui.text(x + 28, y + 72, avail ? "现在没有可以接的任务。" : "目前没有任务记录。", FONT.GRAY);
     list.slice(this.page * PAGE, this.page * PAGE + PAGE).forEach((q, i) => {
-      const ry = y + 70 + i * ROW, done = isDone(q), on = !avail && this.tracked.has(q.id);
+      const ry = y + 70 + i * ROW, done = isDone(q), on = !avail && this.tracked.has(q.id), unmet = avail && q.state === "未满足";
       const rowId = `quest-r${i}`;
       if (ui.hitBox(x + 24, ry - 3, x + W * 64 - 24, ry + ROW - 5, rowId, false)) {
         ui.box(x + 24, ry - 3, x + W * 64 - 24, ry + ROW - 5, "rgba(255,255,255,0.08)", true);
-        ui.bottomLine = q.hint ? `${q.name}：找 ${q.hint}` : done ? `${q.name}：已经完成了。` : `${q.name}：还没有相关的提示。`;
+        const who = (q.hint ?? "").split("　还差：")[0];
+        ui.bottomLine = who ? `${q.name}：找 ${who}` : done ? `${q.name}：已经完成了。` : `${q.name}：还没有相关的提示。`;
+        hover = q;
       }
       if (done || avail) ui.text(x + 32, ry, "　—", FONT.GRAY);
       else if (ui.text(x + 32, ry, on ? "[√]" : "[　]", on ? FONT.GREEN : FONT.WHITE, `quest-t${i}`)) {
@@ -123,13 +128,43 @@ export class QuestWindow {
         this.save();
       }
       ui.text(x + 84, ry, String(q.id), FONT.WHITE);
-      ui.text(x + 136, ry, q.name, done ? FONT.GRAY : on ? FONT.YELLOW : FONT.WHITE);
-      ui.text(x + W * 64 - 28 - measure(q.state), ry, q.state, done ? FONT.GREEN : FONT.YELLOW);
+      ui.text(x + 136, ry, q.name, done || unmet ? FONT.GRAY : on ? FONT.YELLOW : FONT.WHITE);
+      ui.text(x + W * 64 - 28 - measure(q.state), ry, q.state, done ? FONT.GREEN : unmet ? FONT.GRAY : FONT.YELLOW);
     });
     const by = y + H * 48 - 60;
     if (this.page > 0 && ui.text(x + 28, by, "《 上一页", FONT.AQUA, "quest-prev")) this.page--;
     if (this.page < pages - 1 && ui.text(x + W * 64 - 28 - measure("下一页 》"), by, "下一页 》", FONT.AQUA, "quest-next")) this.page++;
     ui.text(x + W * 32 - 120, by, "打勾的任务显示在画面右上角", FONT.GRAY);
     if (ui.text(x + W * 32 - 28, y + H * 48 - 36, "关　闭", FONT.AQUA, "quest-close")) this.open = false;
+    if (hover) this.detail(hover, rects);
+  }
+
+  /** 滑鼠停着的那一项：右边的说明框列任务名、状态、找谁（每个 NPC 一行）、还差什么（每样一行，太长就折行） */
+  private detail(q: QuestEntry, rects: [number, number, number, number][]) {
+    const ui = this.host.ui, inner = DW * 64 - 40;
+    const [who, need] = (q.hint ?? "").split("　还差：");
+    const lines: [string, string][] = [];
+    const add = (text: string, color: string, indent = "") => {
+      let line = "";
+      for (const ch of text) {
+        if (line && measure(line + ch) > inner) { lines.push([line, color]); line = indent; }
+        line += ch;
+      }
+      if (line) lines.push([line, color]);
+    };
+    add(q.name, FONT.YELLOW);
+    add(`状态：${q.state}`, isDone(q) ? FONT.GREEN : q.state === "未满足" ? FONT.GRAY : FONT.WHITE);
+    if (who) {
+      lines.push(["找：", FONT.AQUA]);
+      for (const n of who.split("、")) add(`　${n}`, FONT.WHITE, "　　");
+    }
+    if (need) {
+      lines.push(["还差：", FONT.AQUA]);
+      for (const n of need.split("；")) add(`・${n}`, FONT.WHITE, "　");
+    }
+    const rows = Math.max(2, Math.ceil((lines.length * 18 + 36) / 48));
+    ui.window(DX, Y, DW, rows, "quest-detail");
+    rects.push([DX, Y, DX + DW * 64, Y + rows * 48]);
+    lines.forEach(([t, c], i) => ui.text(DX + 20, Y + 18 + i * 18, t, c));
   }
 }

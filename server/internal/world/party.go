@@ -344,6 +344,7 @@ func (w *World) partyFollow(e *entity, ox, oy int) {
 		ex, ey = sx, sy
 		w.broadcastMove(m)
 		m.client.Send(&proto.ObjMove{ID: m.id, X: m.x, Y: m.y, Dir: m.dir}) // 队员自己的画面跟着走
+		w.petFollowStep(m)
 	}
 }
 

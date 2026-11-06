@@ -125,6 +125,8 @@ func (w *World) freeIf(p *entity, name string, n, flg, temp int) bool {
 		return compare(n, lsSection(w.saHour()), flg)
 	case "DP": // NPC_ActionDuelPointCheck
 		return compare(n, c.DP, flg)
+	case "BBI": // NPC_CheckPlayerBBI（_NPCCHANGE_PLAYERIMG）：玩家现在的形象（CHAR_BASEIMAGENUMBER，变身 / 乌力化也算）；负数不成立
+		return n >= 0 && compare(n, p.sprite, flg)
 	case "EQUIT": // NPC_ActioneEquitCheck：装备中的道具
 		for i := 0; i < data.EquipSlots; i++ {
 			if it := p.inv[i]; it != nil && compare(n, it.ID, flg) {

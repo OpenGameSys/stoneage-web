@@ -34,6 +34,7 @@ type Game struct {
 	Quiz     []Question              // 猜谜题库（question.txt）
 	Quests   []JobDaily              // 任务日志的行（jobdaily.txt，CHAR_JobDaily）
 	Ride     *Ride                   // 骑宠形象对照（ride/familyridefunction.lua）
+	PetTalk  map[int]string          // 跟宠物说话（npc/pettalk，_PET_TALK）：宠物模板编号 → 对话内容
 	Warnings []string
 }
 
@@ -68,6 +69,7 @@ func Load(dataDir string) (*Game, error) {
 	g.Quiz = loadQuizFile(dataDir)
 	g.Quests = loadJobDailyFile(dataDir)
 	g.Ride = LoadRide(dataDir)
+	g.PetTalk = LoadPetTalk(filepath.Join(dataDir, "npc"))
 	for _, w := range append(warps, NPCWarps(npcs)...) {
 		if g.Floors[w.Floor] == nil || g.Floors[w.ToFloor] == nil {
 			continue // 原版里有指向不存在楼层的传送点

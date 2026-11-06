@@ -272,3 +272,17 @@ graphicname=100725
 name=柯黑穆肯
 enemy=npcgen_warpman|file:king/event69_26
 }
+
+#新藏愿藏的祖母(将玛蕾及项炼交给勇者,擅长制作宝石项炼)
+# H5 补回：这份 gmsv 数据把她删了（备份 event69_alpha.create~ 与 data-8.0 都有），没有她事件 70 结束不了、拿不到玛蕾菲雅
+{
+floorid=2000
+borncorner=49,47,49,47
+time=0
+createnum=1
+dir=4
+ignoreinvincible=1
+graphicname=16021
+name=愿藏的祖母
+enemy=changeevent|file:king/event69_7
+}

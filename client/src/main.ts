@@ -777,10 +777,10 @@ class FieldScreen implements Screen {
       if (mouse.clicked) this.moveMode = false;
       else if (grid && now - this.moveTick >= 250) { this.moveTick = now; this.talkTarget = null; f.target = grid; }
     } else if (mouse.clicked && grid && now - this.moveTick >= 250) {
-      // 单击：点到 NPC 就走过去说话，点地面就走到那一格（两次点击至少间隔 250ms，MOVE_CLICK_WAIT_TIME）
+      // 单击：点到 NPC（或地上的宠物）就走过去说话，点地面就走到那一格（两次点击至少间隔 250ms，MOVE_CLICK_WAIT_TIME）
       this.moveTick = now;
       const npc = f.actorAt(mouse.x, mouse.y);
-      if (npc && npc.kind === "npc") { this.talkTarget = npc.id; f.target = [npc.x, npc.y]; }
+      if (npc && (npc.kind === "npc" || npc.kind === "pet")) { this.talkTarget = npc.id; f.target = [npc.x, npc.y]; } // 地上的宠物也能点来说话（PET_Talkfunc）
       else { this.talkTarget = null; f.target = grid; }
     }
     // 地上的东西：滑鼠停着时下方显示名字（道具名、"N Stone"、宠物"名字  Lv：N"）

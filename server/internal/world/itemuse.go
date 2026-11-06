@@ -107,6 +107,10 @@ func (w *World) ItemUse(charID, slot, target int) {
 			w.useAddExp(e, slot, def, pet)
 		case "ITEM_useWarp":
 			w.useWarp(e, slot, def)
+		case "ITEM_petFollow":
+			if pet != nil { // 对自己用：原版找不到那只宠物，什么都不做
+				w.usePetFollow(e, def, target-1)
+			}
 		case "ITEM_useWarpForNum":
 			w.useWarpForNum(e, slot, def)
 		case "ITEM_Constitution":

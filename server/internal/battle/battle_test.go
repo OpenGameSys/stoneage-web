@@ -156,7 +156,7 @@ func TestPickEnemiesFromRealData(t *testing.T) {
 		if a.ZOrder <= 0 {
 			continue
 		}
-		specs := PickEnemies(bd, a, r)
+		specs := PickEnemies(bd, a, r, nil)
 		if len(specs) == 0 {
 			continue
 		}
@@ -230,5 +230,36 @@ func TestEnemyGuardScale(t *testing.T) {
 	full, half, none := count(1, false), count(0.5, false), count(0, true)
 	if none != 0 || half*10 > full*8 || half*10 < full*4 {
 		t.Fatalf("防御次数：原版 %d、0.5 倍 %d、不防御 %d", full, half, none)
+	}
+}
+
+// 队伍的出现道具 / 不出现道具（ENEMY_getEnemy 的 GROUP_APPEARBYITEMID / NOTAPPEARBYITEMID）：
+// 宝珠地（队伍 711）要带结晶石 2764 才出现；逃走鲁尼帖斯（605）带着雅哈奴的日记 2698 就不出现。
+func TestPickEnemiesByItem(t *testing.T) {
+	const dir = "../../../gamedata"
+	if _, err := os.Stat(dir); err != nil {
+		t.Skip("没有原版数据")
+	}
+	bd, err := data.LoadBattle(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appear, hide := bd.Groups[711], bd.Groups[605]
+	if appear == nil || appear.AppearItem != 2764 || hide == nil || hide.HideItem != 2698 {
+		t.Fatalf("队伍数据不对：%+v %+v", appear, hide)
+	}
+	r := rnd(5)
+	area := func(g int) *data.EncountArea {
+		return &data.EncountArea{EnemyMax: 5, Groups: []int{g}, GroupProbs: []int{100}}
+	}
+	carry := func(id int) func(int) bool { return func(x int) bool { return x == id } }
+	if len(PickEnemies(bd, area(711), r, nil)) != 0 || len(PickEnemies(bd, area(711), r, carry(1))) != 0 {
+		t.Error("没带结晶石不应遇到宝珠")
+	}
+	if len(PickEnemies(bd, area(711), r, carry(2764))) == 0 {
+		t.Error("带着结晶石应遇到宝珠")
+	}
+	if len(PickEnemies(bd, area(605), r, nil)) == 0 || len(PickEnemies(bd, area(605), r, carry(2698))) != 0 {
+		t.Error("逃走鲁尼帖斯应在带着日记时不出现、没带时出现")
 	}
 }

@@ -957,37 +957,26 @@ func (w *World) exAcceptDel(p, n *entity, st exState) bool {
 
 // ---------------- 传送 NPC ----------------
 
-// exWarpNpc 是 NPC_EventWarpNpc：NpcWarp 是以 "," 分开的 "楼层.x.y"，NPC 依序换到下一个位置（最后一个之后回到第一个）。
-// 原版用 CHAR_WORK_EVENTWARP 记下一个的序号（初值 1）；这里按 NPC 现在站在第几个位置来找下一个（不在表上时用第一个），
-// 数据里 NPC 出生在表上的最后一个位置，两者相同。写错（不到三段）的跳过。
+// exWarpNpc 是 NPC_EventWarpNpc：NpcWarp 是以 "," 分开的 "楼层.x.y"，NPC 依序换到表上的下一个位置（走完回到第一个）。
+// 照原版用计数器 CHAR_WORK_EVENTWARP 记下一个的序号（初值 1），所以表上有重复的点也照样往下走；写错（不到三段）的跳过。
 func (w *World) exWarpNpc(n *entity, b string) {
 	spec, ok := data.ArgField(b, "NpcWarp")
 	if !ok {
 		return
 	}
-	parse := func(s string) (f, x, y int, ok bool) {
-		v := strings.Split(s, ".")
-		if len(v) < 3 {
-			return 0, 0, 0, false
-		}
-		return data.Atoi(v[0]), data.Atoi(v[1]), data.Atoi(v[2]), true
-	}
 	pts := strings.Split(spec, ",")
-	start := 0
-	for i, s := range pts {
-		if f, x, y, ok := parse(s); ok && f == n.floor && x == n.x && y == n.y {
-			start = i + 1
-			break
-		}
+	cnt := max(n.evWarp, 1)
+	if cnt > len(pts) {
+		cnt = 1
 	}
-	if start >= len(pts) {
-		start = 0
-	}
-	for _, s := range pts[start:] {
-		if f, x, y, ok := parse(s); ok {
-			w.exMoveNpc(n, f, x, y)
-			return
+	for ; cnt <= len(pts); cnt++ {
+		v := strings.Split(pts[cnt-1], ".")
+		if len(v) < 3 {
+			continue
 		}
+		n.evWarp = cnt + 1
+		w.exMoveNpc(n, data.Atoi(v[0]), data.Atoi(v[1]), data.Atoi(v[2]))
+		return
 	}
 }
 

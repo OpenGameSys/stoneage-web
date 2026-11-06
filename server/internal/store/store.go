@@ -72,6 +72,8 @@ type Character struct {
 	// 运气 1..5 与抽运气的时间（CHAR_LUCK / CHAR_LASTTIMESETLUCK，Unix 秒；0 是还没抽过）
 	Luck     int
 	LuckTime int64
+	// 转生用的累计（原版 CHAR_TRANSEQUATION：高 16 位是历次转生时做完的任务数、低 16 位是历次转生时的等级（最多 130）的总和）
+	TransEq int
 }
 
 type Store interface {
@@ -191,6 +193,7 @@ var migrations = []string{
 	`ALTER TABLE characters ADD COLUMN luck INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE characters ADD COLUMN luck_time INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE accounts ADD COLUMN secret BLOB NOT NULL DEFAULT X''`,
+	`ALTER TABLE characters ADD COLUMN trans_eq INTEGER NOT NULL DEFAULT 0`,
 }
 
 // OpenSQLite 打开（必要时创建）数据库文件。
@@ -315,12 +318,12 @@ func (s *sqliteStore) Authenticate(ctx context.Context, name, password string) (
 }
 
 const charCols = `id, account_id, name, sprite, level, hometown, floor, x, y, dir,
-	face, vital, str, tgh, dex, earth, water, fire, wind, charm, logins, exp, dp, trans, hp, mp, points, gold, items, elder, savepoints, fame, pool, endevent, nowevent, pets, magic, addexp, pig, addressbook, family, luck, luck_time`
+	face, vital, str, tgh, dex, earth, water, fire, wind, charm, logins, exp, dp, trans, hp, mp, points, gold, items, elder, savepoints, fame, pool, endevent, nowevent, pets, magic, addexp, pig, addressbook, family, luck, luck_time, trans_eq`
 
 func scanChar(row interface{ Scan(...any) error }) (Character, error) {
 	var c Character
 	err := row.Scan(&c.ID, &c.AccountID, &c.Name, &c.Sprite, &c.Level, &c.Hometown, &c.Floor, &c.X, &c.Y, &c.Dir,
-		&c.Face, &c.Vital, &c.Str, &c.Tgh, &c.Dex, &c.Earth, &c.Water, &c.Fire, &c.Wind, &c.Charm, &c.Logins, &c.Exp, &c.DP, &c.Trans, &c.HP, &c.MP, &c.Points, &c.Gold, &c.Items, &c.Elder, &c.SavePoints, &c.Fame, &c.Pool, &c.EndEvents, &c.NowEvents, &c.Pets, &c.Magic, &c.AddExp, &c.Pig, &c.AddressBook, &c.Family, &c.Luck, &c.LuckTime)
+		&c.Face, &c.Vital, &c.Str, &c.Tgh, &c.Dex, &c.Earth, &c.Water, &c.Fire, &c.Wind, &c.Charm, &c.Logins, &c.Exp, &c.DP, &c.Trans, &c.HP, &c.MP, &c.Points, &c.Gold, &c.Items, &c.Elder, &c.SavePoints, &c.Fame, &c.Pool, &c.EndEvents, &c.NowEvents, &c.Pets, &c.Magic, &c.AddExp, &c.Pig, &c.AddressBook, &c.Family, &c.Luck, &c.LuckTime, &c.TransEq)
 	return c, err
 }
 
@@ -350,9 +353,9 @@ func (s *sqliteStore) CreateCharacter(ctx context.Context, c Character) (Charact
 	}
 	c.Elder = c.Hometown // CHAR_getInitElderPosition：新角色的记录点是出生村落的长老
 	res, err := s.db.ExecContext(ctx, `INSERT INTO characters(account_id, name, sprite, level, hometown, floor, x, y, dir, created_at,
-		face, vital, str, tgh, dex, earth, water, fire, wind, charm, logins, exp, dp, trans, hp, mp, points, gold, items, elder, savepoints, fame, pool, endevent, nowevent, pets, magic, addexp, pig, addressbook, family, luck, luck_time)
-		VALUES(?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, c.AccountID, c.Name, c.Sprite, c.Level, c.Hometown, c.Floor, c.X, c.Y, c.Dir, time.Now().Unix(),
-		c.Face, c.Vital, c.Str, c.Tgh, c.Dex, c.Earth, c.Water, c.Fire, c.Wind, c.Charm, c.Logins, c.Exp, c.DP, c.Trans, c.HP, c.MP, c.Points, c.Gold, c.Items, c.Elder, c.SavePoints, c.Fame, c.Pool, c.EndEvents, c.NowEvents, c.Pets, c.Magic, c.AddExp, c.Pig, c.AddressBook, c.Family, c.Luck, c.LuckTime)
+		face, vital, str, tgh, dex, earth, water, fire, wind, charm, logins, exp, dp, trans, hp, mp, points, gold, items, elder, savepoints, fame, pool, endevent, nowevent, pets, magic, addexp, pig, addressbook, family, luck, luck_time, trans_eq)
+		VALUES(?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, c.AccountID, c.Name, c.Sprite, c.Level, c.Hometown, c.Floor, c.X, c.Y, c.Dir, time.Now().Unix(),
+		c.Face, c.Vital, c.Str, c.Tgh, c.Dex, c.Earth, c.Water, c.Fire, c.Wind, c.Charm, c.Logins, c.Exp, c.DP, c.Trans, c.HP, c.MP, c.Points, c.Gold, c.Items, c.Elder, c.SavePoints, c.Fame, c.Pool, c.EndEvents, c.NowEvents, c.Pets, c.Magic, c.AddExp, c.Pig, c.AddressBook, c.Family, c.Luck, c.LuckTime, c.TransEq)
 	if err != nil {
 		if isUnique(err) {
 			return Character{}, ErrExists
@@ -418,10 +421,10 @@ func (s *sqliteStore) SaveExpPets(ctx context.Context, charID int64, exp int, pe
 func (s *sqliteStore) SaveProgress(ctx context.Context, c Character) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE characters SET level=?, exp=?, dp=?, charm=?, hp=?, mp=?, points=?,
 		vital=?, str=?, tgh=?, dex=?, earth=?, water=?, fire=?, wind=?, trans=?, gold=?, items=?, elder=?, savepoints=?, fame=?, pool=?, endevent=?, nowevent=?, pets=?, magic=?, addexp=?, pig=?, addressbook=?, family=?,
-		luck=?, luck_time=? WHERE id = ?`,
+		luck=?, luck_time=?, trans_eq=? WHERE id = ?`,
 		c.Level, c.Exp, c.DP, c.Charm, c.HP, c.MP, c.Points, c.Vital, c.Str, c.Tgh, c.Dex, c.Earth, c.Water, c.Fire, c.Wind, c.Trans,
 		c.Gold, c.Items, c.Elder, c.SavePoints, c.Fame, c.Pool, c.EndEvents, c.NowEvents, c.Pets, c.Magic, c.AddExp, c.Pig, c.AddressBook, c.Family,
-		c.Luck, c.LuckTime, c.ID)
+		c.Luck, c.LuckTime, c.TransEq, c.ID)
 
 	return err
 }

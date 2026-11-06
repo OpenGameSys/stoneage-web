@@ -1,0 +1,14 @@
+NPCTEMPLATE
+# H5 补的：地精灵任务（eden3/earth）的监牢警卫（60080 / 60081，参数 earth60080_20_5 等是官方数据）与蛇王巢穴（sa70/snake）的战斗 NPC
+# 用模板名 devilpk；8.0 只在 party/devil/devil.template 里定义它（party/ 目录整个当私服没收），这里只补这一个模板，内容照 8.0。
+{
+templatename=devilpk
+makeatnobody=1
+makeatnosee=1
+type=101277
+functionset=NPCEnemy
+hp=100
+mp=100
+str=1
+tough=1
+}

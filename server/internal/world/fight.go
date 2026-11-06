@@ -105,7 +105,7 @@ func (w *World) rollEncounter(e *entity) {
 
 // startBattle 按遇敌区域生成敌人并开打（BATTLE_CreateVsEnemy）。
 func (w *World) startBattle(e *entity, a *data.EncountArea) {
-	specs := battle.PickEnemies(w.game.Battle, a, w.rnd)
+	specs := battle.PickEnemies(w.game.Battle, a, w.rnd, func(id int) bool { return w.hasItem(e, id) })
 	if len(specs) == 0 {
 		return
 	}

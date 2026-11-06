@@ -48,7 +48,8 @@ var gmMenu = []proto.GmItem{
 		Defaults: []string{"$earth", "$water", "$fire", "$wind"}, Hint: "每项 0..10，加起来不超过 10"},
 	{Group: "角色", Cmd: "/charm", Name: "设定魅力", Args: []string{"魅力"}, Kinds: []string{""}, Defaults: []string{"100"}, Hint: "0..100"},
 	{Group: "角色", Cmd: "/dp", Name: "设定 DP", Args: []string{"DP"}, Kinds: []string{""}, Defaults: []string{"1000"}},
-	{Group: "角色", Cmd: "/trans", Name: "设定转生", Args: []string{"转生次数"}, Kinds: []string{"opt:0|1|2|3|4|5"}, Defaults: []string{"0"}, Hint: "只改转生次数（影响石币上限、骑乘等）"},
+	{Group: "角色", Cmd: "/trans", Name: "设定转生", Args: []string{"转生次数"}, Kinds: []string{"opt:0|1|2|3|4|5"}, Defaults: []string{"0"}, Hint: "只改转生次数（影响石币上限、骑乘等），不重算数值"},
+	{Group: "角色", Cmd: "/tensei", Name: "转生", Hint: "照精灵王的算法转生一次（要 80 级、不到 6 转）：重算基本状态、清任务旗标、变回 1 级；不收宠物、不送宠物、不传送"},
 	{Group: "角色", Cmd: "/luck", Name: "设定运气", Args: []string{"运气"}, Kinds: []string{"opt:1|2|3|4|5"}, Defaults: []string{"5"}, Hint: "影响会心、捕获等（原版每个游戏日重抽）"},
 	{Group: "角色", Cmd: "/hp", Name: "设定耐久力", Args: []string{"HP"}, Kinds: []string{""}, Defaults: []string{"1"}, Hint: "现在的 HP（不超过最大值），测补血用"},
 	{Group: "角色", Cmd: "/mp", Name: "设定气力", Args: []string{"MP"}, Kinds: []string{""}, Defaults: []string{"0"}, Hint: "现在的 MP（不超过最大值）"},
@@ -449,7 +450,20 @@ func (w *World) gmCommand(e *entity, text string) bool {
 		}
 		c.Trans = n
 		changed()
-		reply("转生次数设为 %d", n)
+		reply("转生次数设为 %d（只改次数，要照原版重算请用 /tensei）", n)
+	case "/tensei":
+		// CHAR_CHAT_DEBUG_Trans：不看任务与宠物条件，只要 80 级以上（原版的 GM 指令先算数值才加转生次数，这里照精灵王的顺序）
+		if c.Level < transMinLevel || c.Trans >= transMax {
+			reply("要 80 级以上、不到 %d 转才能转生（现在 %d 级、%d 转）", transMax, c.Level, c.Trans)
+			return true
+		}
+		before := [4]int{c.Vital, c.Str, c.Tgh, c.Dex}
+		c.Trans++
+		w.transReset(e)
+		w.petsChanged(e)
+		w.flushQuests(e)
+		changed()
+		reply("转生为 %d 转：体腕耐敏 %v → %v，可分配点数 %d", c.Trans, before, [4]int{c.Vital, c.Str, c.Tgh, c.Dex}, c.Points)
 
 	case "/item":
 		id := num(1, 0, math.MaxInt32)

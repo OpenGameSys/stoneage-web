@@ -360,6 +360,45 @@ func (w *World) runEventAction(p *entity, arg string) bool {
 	return true
 }
 
+// freeWarpDest 是 NPC_WarpWarpCharacter 的 FREEMORE（_NEW_WARPPOINT）：参数按 "OVER" 分段，第一段 FREE 条件成立的，
+// 从它的 TO（"楼层,x,y" 以 "&" 分开，最多 10 个）随机挑一个；有 CHECKPARTY:TRUE 而且是队长就先拆队。
+// 都不成立（或目的地不在地图上）就传回传送点这一格（原版传到 NPC 自己的位置）。
+func (w *World) freeWarpDest(e *entity, warp data.Warp) (int, int, int) {
+	for _, seg := range strings.Split(warp.Free, "OVER") {
+		cond, ok := data.ArgField(seg, "FREE")
+		if !ok || !w.passCheck(e, cond) {
+			continue
+		}
+		to, ok := data.ArgField(seg, "TO")
+		if !ok {
+			continue
+		}
+		var pts [][3]int
+		for _, s := range strings.Split(to, "&") {
+			v := strings.Split(s, ",")
+			if len(v) < 3 {
+				break
+			}
+			pts = append(pts, [3]int{data.Atoi(v[0]), data.Atoi(v[1]), data.Atoi(v[2])})
+			if len(pts) >= 10 {
+				break
+			}
+		}
+		if len(pts) == 0 {
+			continue
+		}
+		pt := pts[w.rnd.IntN(len(pts))]
+		if v, ok := data.ArgField(warp.Free, "CHECKPARTY"); ok && strings.Contains(v, "TRUE") && e.isLeader() {
+			w.leaveParty(e, true) // CHAR_DischargeParty
+		}
+		if f := w.game.Floors[pt[0]]; f == nil || pt[1] < 0 || pt[2] < 0 || pt[1] >= f.W || pt[2] >= f.H {
+			break
+		}
+		return pt[0], pt[1], pt[2]
+	}
+	return warp.ToFloor, warp.ToX, warp.ToY
+}
+
 // warpByArg 是 NPC_WarpMsg：WARP 可以写几个以 ";" 分开的 "楼层,x,y"，随机挑一个（GetRand_WarpPoint）；0,0,0 表示不传送。
 func (w *World) warpByArg(p *entity, arg string) {
 	spec, ok := data.ArgField(arg, "WARP")

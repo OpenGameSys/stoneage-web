@@ -38,13 +38,14 @@ func wpick(rnd *rand.Rand, w []int) int {
 }
 
 // PickEnemies 是 ENEMY_getEnemy：先按权重选一支队伍，再决定出场数量（1..区域上限，且不超过队伍里各敌人上限之和），
-// 然后按权重逐只抽敌人，同种敌人不超过它的 CreateMax。需要道具才出现的队伍不会被选到（还没有道具）。
-func PickEnemies(bd *data.BattleData, area *data.EncountArea, rnd *rand.Rand) []EnemySpec {
+// 然后按权重逐只抽敌人，同种敌人不超过它的 CreateMax。队伍的 GROUP_APPEARBYITEMID / NOTAPPEARBYITEMID：
+// 遇敌的人身上（含装备）有那件道具才出现 / 就不出现；has 是 nil 时当作身上什么都没有。
+func PickEnemies(bd *data.BattleData, area *data.EncountArea, rnd *rand.Rand, has func(itemID int) bool) []EnemySpec {
 	var groups []*data.Group
 	var gw []int
 	for i, gid := range area.Groups {
 		g := bd.Groups[gid]
-		if g == nil || g.AppearItem != -1 {
+		if g == nil || g.AppearItem != -1 && (has == nil || !has(g.AppearItem)) || g.HideItem != -1 && has != nil && has(g.HideItem) {
 			continue
 		}
 		groups = append(groups, g)

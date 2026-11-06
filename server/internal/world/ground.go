@@ -35,6 +35,8 @@ type ground struct {
 	pet     *Pet
 	owner   int64 // 丢的人（宠物只有他能捡）
 	putTime time.Time
+	follow  bool // 溜宠：跟着主人走、不会因为放太久消失（CHAR_PETFOLLOW_NOW，petfollow.go）
+	steps   int  // 溜宠跟着走了几步（CHAR_WORKPETFOLLOWCOUNT）
 }
 
 func goldSprite(n int) int {
@@ -332,6 +334,17 @@ func (w *World) pickOne(e *entity, o *entity) bool {
 		w.saveProgress(e)
 	case "pet":
 		p := g.pet
+		if g.follow { // 溜着的宠物：等级差、主人照常检查，栏位满了由 CHAR_pickupFollowPet 说
+			switch {
+			case p.Level-e.char.Level > 20 && e.char.Trans <= 0:
+				w.sysMsg(e, "无法照顾该宠物。", colorWhite)
+			case g.owner != e.char.ID:
+				w.sysMsg(e, "无法拾获该宠物。", colorWhite)
+			default:
+				w.pickupFollowPet(e, o)
+			}
+			return true
+		}
 		slot := e.pets.free()
 		switch {
 		case slot < 0:
@@ -362,7 +375,7 @@ func (w *World) sweepGround() {
 	for _, fl := range w.floors {
 		for _, o := range fl {
 			g := o.ground
-			if g == nil {
+			if g == nil || g.follow {
 				continue
 			}
 			life := w.Rules.GroundItem

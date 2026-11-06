@@ -1,0 +1,16 @@
+NPCCREATE
+# 精灵王（npc_transmigration，原版 npc/npc_transmigration.c）：H5 补的摆放。
+# 这份 gmsv 数据只有参数档 ten.arg、没有摆放；位置照 serv/data-8.0 的 giiru/event/sikkoku/sikkoku.create，
+# 参数档用官方这份（8.0 引用的是私服目录 777/ten.arg，转生送的宠物被换过）。
+###### 精灵王 ######
+{
+name=精灵王
+floorid=32021
+dir=4
+createnum=1
+time=0
+graphicname=100444
+borncorner=31,28,31,28
+ignoreinvincible=1
+enemy=npc_transmigration|file:giiru/event/sikkoku/ten.arg
+}

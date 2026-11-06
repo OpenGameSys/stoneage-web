@@ -71,6 +71,8 @@ type entity struct {
 	stepTokens       float64
 	lastStep         time.Time
 	npc              *data.NPC    // NPC 才有：对话行为与内容
+	follow           *entity      // 溜着的宠物（地上的 "pet" 物件，petfollow.go；CHAR_WORKPETFOLLOW）
+	evWarp           int          // 任务交换 NPC 的 NpcWarp 下一个位置的序号（CHAR_WORK_EVENTWARP，0 当 1）
 	cep              int          // 遇敌值（原版 CONNECT_get_CEP）
 	watch            *battleRoom  // 正在观战的那场（watch.go），不能走动
 	bus              *bus         // 会走动的 NPC（bus.go）：巴士 / 飞机的路线与状态
@@ -138,6 +140,7 @@ type World struct {
 	buses     []*entity         // 会走动的 NPC（bus.go tickBuses）
 	warPlace  map[int]*warPlace // 对战场的位置（fmwar.go warPlaces，算一次）
 	qhints    map[int]string    // 事件编号 → 相关 NPC 的提示（quest.go questHints，算一次）
+	qsettable map[int]bool      // 资料里有办法设起来的事件（quest.go questSettable，算一次）
 	floorVers map[int]string    // 楼层资料的版本（floorVer，客户端拿它决定本机存的地图还能不能用）
 
 	// saves 是存档队列：由一个协程按顺序写库，保证同一角色的新存档不会被旧存档盖掉。
@@ -436,6 +439,9 @@ func (w *World) leave(e *entity) {
 	w.vendorClear(e)
 	w.dropItemsAtLogout(e)
 	w.leaveParty(e, true) // _CHAR_logout：CHAR_DischargeParty
+	if o := w.followPetOf(e); o != nil {
+		w.pickupFollowPet(e, o) // 下线收回溜着的宠物（栏位满了就留在地上，回来还能右键收回）
+	}
 	w.removeFromFloor(e)
 	delete(w.players, e.id)
 	w.notifyLoginLogout(e, false)
@@ -473,11 +479,16 @@ func (w *World) Move(charID, x, y, dir int) {
 		e.x, e.y, e.dir = nx, ny, dir
 		e.clearAction()
 		if warp, found := w.game.WarpAt(e.floor, nx, ny); found {
-			w.placeOnFloor(e, warp.ToFloor, warp.ToX, warp.ToY, e.dir)
+			fl, x, y := warp.ToFloor, warp.ToX, warp.ToY
+			if warp.Free != "" {
+				fl, x, y = w.freeWarpDest(e, warp)
+			}
+			w.placeOnFloor(e, fl, x, y, e.dir)
 			return
 		}
 		w.broadcastMove(e)
 		w.partyFollow(e, ox, oy)
+		w.petFollowStep(e) // 溜着的宠物跟上来
 		e.stay = false // 走一步就不再原地遇敌（clearStayEncount）
 		w.rollEncounter(e)
 	})
@@ -544,6 +555,13 @@ func (w *World) Talk(charID, npcID int) {
 			return
 		}
 		n := w.floors[p.floor][npcID]
+		if n != nil && n.ground != nil && n.ground.pet != nil && !p.busy() { // 点地上的宠物：跟它说话（pettalk.go）
+			if max(abs(n.x-p.x), abs(n.y-p.y)) <= 1 {
+				w.face(p, n)
+				w.petTalk(p, n, "")
+			}
+			return
+		}
 		if n == nil || n.npc == nil || n.npc.Function == "" || n.hidden() || p.busy() { // 交易、摆摊中不能找 NPC（CHAR_WORKTRADEMODE）
 			return
 		}
@@ -671,6 +689,13 @@ func (w *World) Talk(charID, npcID int) {
 			w.windowmanOpen(p, n, 1) // NPC_Riderman_selectWindow(1)
 		case "Bus", "Airplane":
 			w.busTalk(p, n)
+		case "Transmigration":
+			// NPC_TransmigrationTalked：2 格内面对面（服务端替玩家转身）
+			if dist > 2 {
+				return
+			}
+			w.face(p, n)
+			w.transTalk(p, n)
 		case "ManorSman":
 			w.manorSmanTalk(p, n)
 		case "Scheduleman":
@@ -919,9 +944,13 @@ func (w *World) Chat(charID int, channel, text string, color, area int) {
 					}
 				}
 			}
-			// 原版 CHAR_Talk 会把话转给听得到的 NPC（Talked）；用得到说的内容的是带暗语（warp_msg）的传送员和道具店（buy_msg 等）
+			// 原版 CHAR_Talk 会把话转给听得到的 NPC（Talked）；用得到说的内容的是带暗语（warp_msg）的传送员和道具店（buy_msg 等）；地上的宠物也听（PET_Talkfunc）
 			if e.fight == nil {
 				for _, o := range w.floors[e.floor] {
+					if o.ground != nil && o.ground.pet != nil && hear(o) { // 地上的宠物（PET_Talkfunc）
+						w.petTalk(e, o, text)
+						continue
+					}
 					if o.npc == nil || !hear(o) || e.window != nil && e.window.kind == "shop" {
 						continue
 					}
@@ -1058,6 +1087,7 @@ func (w *World) placeOnFloor(e *entity, floor, x, y, dir int) {
 	e.visible = map[int]bool{}
 	w.refreshView(e)
 	w.announce(e)
+	w.petFollowWarp(e) // 溜着的宠物传到同一格
 	switch {
 	case e.isLeader() && !w.partyWarping:
 		// 队长传送时队员传到同一格（EVENT_onWarpNPC、MAPPOINT_MapWarpHandle、回记录点都是全队一起）
@@ -1131,7 +1161,9 @@ func (w *World) announce(e *entity) {
 
 // broadcastMove 在 e 走了一步之后：更新它自己的视野，并通知其他玩家（移动 / 出现 / 消失）。
 func (w *World) broadcastMove(e *entity) {
-	w.refreshView(e)
+	if e.client != nil { // 溜着的宠物没有自己的画面
+		w.refreshView(e)
+	}
 	for _, o := range w.floors[e.floor] {
 		if o == e || o.client == nil {
 			continue
