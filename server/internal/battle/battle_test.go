@@ -181,6 +181,30 @@ func TestPickEnemiesFromRealData(t *testing.T) {
 	if a := bd.AreaAt(100, 650, 450); a == nil {
 		t.Fatal("floor 100 (650,450) 应在遇敌区域内")
 	}
+
+	// 驗證薩姆吉爾村外圍（區域 21、22、23）抽樣敵人等級。
+	// 透過多次抽樣確保所有抽出之敵人等級上限皆不超過 10 級，防止新手村周邊混入高等怪。
+	for _, areaIdx := range []int{21, 22, 23} {
+		var targetArea *data.EncountArea
+		for i := range bd.Areas {
+			if bd.Areas[i].Index == areaIdx {
+				targetArea = &bd.Areas[i]
+				break
+			}
+		}
+		if targetArea == nil {
+			t.Fatalf("未找到區域 %d", areaIdx)
+		}
+		for sample := 0; sample < 100; sample++ {
+			specs := PickEnemies(bd, targetArea, r)
+			for _, s := range specs {
+				if s.Enemy.LvMax > 10 {
+					t.Fatalf("薩村外圍區域 %d 出現高等怪（ID: %d, LvMax: %d > 10）",
+						areaIdx, s.Enemy.ID, s.Enemy.LvMax)
+				}
+			}
+		}
+	}
 }
 
 // 击飞（BATTLE_DamageSub 的 IsUltimate）：一下 ≥ 最大 HP × 1.2 + 20 直接击飞（2）、累计到了也击飞（1）、雷尔不会。

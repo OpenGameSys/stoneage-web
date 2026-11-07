@@ -260,7 +260,9 @@ const app: App = {
     c.on("Error", (m) => { if (m.code !== "rate") app.message(m.message); });
     c.on("CharListResult", (m) => { app.chars = m.chars; app.maxChars = m.maxChars; });
     c.on("EnterFloor", (m) => {
-      if (!(screen instanceof FieldScreen)) app.go(new FieldScreen());
+      // 換樓層時若戰鬥仍在進行（例如被打飛傳送回記錄點），不強行中斷戰鬥演出。
+      // 地圖資訊已在背景更新，待戰鬥畫面自然播放完畢後由 finish 切回地圖，避免狀態殘留。
+      if (!battle && !(screen instanceof FieldScreen)) app.go(new FieldScreen());
       chat(`来到了${m.name}。`, FONT.GREEN);
     });
     // 玩家发言用发言者在聊天设定里选的颜色（原版 TK 协议带 color）
@@ -366,7 +368,11 @@ const app: App = {
         },
       }, m);
       const b = battle;
-      if (!quick) app.go({ frame: (now) => { if (field) updatePalette(now, field.palette); b.frame(now); } });
+      // 戰鬥畫面物件註冊 leave 鉤子，保證在任何情境下切換離開戰鬥畫面皆會重置戰鬥狀態。
+      if (!quick) app.go({
+        frame: (now) => { if (field) updatePalette(now, field.palette); b.frame(now); },
+        leave: () => { if (battle === b) battle = null; },
+      });
     });
     c.on("BattleTurn", (m) => battle?.onTurn(m));
     c.on("BattleEnd", (m) => {
@@ -418,6 +424,7 @@ const app: App = {
     field.hideOthers = settings.hideOthers;
     field.showNames = settings.names;
     selfStatus = null;
+    battle = null;
     gmItems = [];
     chatLog.length = 0;
     audio.fadeOutBgm(); // 选好人物：选人物的音乐淡出（PROC_CHAR_LOGIN_START）
@@ -578,6 +585,7 @@ class FieldScreen implements Screen {
     logout: () => {
       app.net?.send({ t: "Logout" });
       field = null;
+      battle = null;
       app.go(new CharSelectScreen(app));
     },
     settingsChanged: () => { if (field) { field.hideOthers = settings.hideOthers; field.showNames = settings.names; } applyCursor(); audio.apply(); },
