@@ -90,12 +90,15 @@ func (w *World) rollEncounter(e *entity) {
 	if a == nil {
 		return
 	}
-	// 驱魔中不遇敌（CHAR_walk：noenemy > 0 时整段跳过，遇敌值也不加）；8252 / 8253 / 8254 / 8256 号地图例外
-	if e.noenemy > 0 && !(e.floor >= 8252 && e.floor <= 8256 && e.floor != 8255) {
+	// 驱魔中、装着太阳神的首饰在它管的楼层不遇敌（CHAR_walk：noen > 0 时整段跳过，遇敌值也不加）；8252 / 8253 / 8254 / 8256 号地图例外（noenemy.go）
+	if w.encounterBlocked(e) {
 		return
 	}
 	e.cep = max(a.ProbMin, min(a.ProbMax, e.cep))
 	if float64(w.rnd.IntN(EncounterDivisor)) < float64(e.cep)*w.Rules.EncounterRate { // 遇敌率倍率（rules.encounterRate）
+		if !w.randEnemyPass(e) { // 月亮首饰 / 星星之守护：这次不遇敌，遇敌值不变
+			return
+		}
 		e.cep = a.ProbMin
 		w.startBattle(e, a)
 	} else if e.cep < a.ProbMax {

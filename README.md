@@ -17,11 +17,14 @@
 
 | | |
 |---|---|
-| ![登录](docs/screenshots/login.jpg) 原版风格的登录画面 | ![加鲁卡](docs/screenshots/field-bridge.jpg) 地图：加鲁卡的木桥（贴地物件画在角色下面） |
-| ![战斗](docs/screenshots/battle.jpg) 回合制战斗，敌人头上常显名字与等级 | ![观战](docs/screenshots/watch.jpg) 观战别人的战斗 |
-| ![宠物](docs/screenshots/pet-window.jpg) 宠物窗口与扩展资料（含能不能骑） | ![任务](docs/screenshots/quest-window.jpg) 任务查询与追踪 |
-| ![战斗设定](docs/screenshots/battle-settings.jpg) 战斗设定（智能战斗、人物 / 宠物的行动计划） | ![巴士](docs/screenshots/bus.jpg) 萨姆吉尔的长毛象巴士站 |
-| ![世界地图](docs/screenshots/world-map.jpg) 世界地图：看过的区域、别层的地图、全层的 NPC 位置、缩放与拖动 | ![摆摊](docs/screenshots/vendor-stall.jpg) 摆摊：头上的招牌与货摊，面向店家看清单、勾选购买 |
+| ![登录](docs/screenshots/login.jpg) 原版风格的登录画面 | ![萨姆吉尔](docs/screenshots/field-hud.jpg) 萨姆吉尔村：画面上方按钮、右上角楼层名与小地图、底部任务栏 |
+| ![尼克斯](docs/screenshots/field-nyx.jpg) 尼克斯水城 | ![加鲁卡](docs/screenshots/field-bridge.jpg) 加鲁卡的木桥（贴地物件画在角色下面） |
+| ![战斗](docs/screenshots/battle.jpg) 回合制战斗，敌人头上常显名字与等级 | ![攻击](docs/screenshots/battle-attack.jpg) 攻击演出：伤害数字、打中的星星 |
+| ![捕捉](docs/screenshots/battle-capture.jpg) 捕捉宠物 | ![组队战斗](docs/screenshots/battle-party.jpg) 组队战斗 |
+| ![宠物](docs/screenshots/pet-window.jpg) 宠物详细资料与扩展资料（含能不能骑） | ![任务](docs/screenshots/quest-window.jpg) 任务查询：可接任务与要找谁 |
+| ![战斗设定](docs/screenshots/battle-settings.jpg) 战斗设定（智能战斗、自动遇敌、补血时机） | ![巴士](docs/screenshots/bus.jpg) 萨伊那斯的长毛象巴士站 |
+| ![世界地图](docs/screenshots/world-map.jpg) 世界地图：看过的区域、去过的楼层、缩放与拖动 | ![聊天](docs/screenshots/chat.jpg) 头顶聊天气泡与聊天栏 |
+| ![摆摊](docs/screenshots/vendor-sign.jpg) 摆摊：头上的招牌与地上的货摊 | ![看摊位](docs/screenshots/vendor-stall.jpg) 面向店家看清单、勾选购买 |
 
 使用手册（架设、设定、玩法、GM 指令）见 [docs/手册.md](docs/手册.md)。
 
@@ -121,7 +124,8 @@ config.yaml      服务端设定（config.local.yaml 是本机覆盖，不进 gi
   美容师、占卜师、猜拳道场、猜谜、道具兑换、麦克风、看动作的人、任务交换（340 个）、战斗 NPC（道场、魔王、守门的敌人）、宠物店、宠物技能店、
   骑乘训练师、决斗强者表、家族管理员、家族留言版、家族银行、庄园的秘书与小护士、长毛象巴士与加美航空（沿路线连续走动、乘客跟着走，速度由 `rules.busStep` 调）、
   庄园争夺战与家族 PK 场的踢馆登记人 / 场地预约人 / 对战向导 / 召唤员 / 服务员。
-- **转生**：漆黑的洞窟地下 20 楼的精灵王，人物 1～6 转（守护兽、条件、重算基本状态、清任务旗标、送转生宠物）与宠物转生（玛蕾菲雅，最多 2 次），照原版 npc_transmigration.c；跟放在地上的宠物说话（玛蕾菲雅靠这个把等级上限从 10 一段段提到 79，pet_event.c PET_Talkfunc）；溜宠（宠物项圈 / 玛蕾菲雅的项链让宠物跟着走）。
+- **转生**：漆黑的洞窟地下 20 楼的精灵王，人物 1～6 转（守护兽、条件、重算基本状态、清任务旗标、送转生宠物）与宠物转生（玛蕾菲雅，最多 2 次），照原版 npc_transmigration.c；跟放在地上的宠物说话（玛蕾菲雅靠这个把等级上限从 10 一段段提到 79，pet_event.c PET_Talkfunc）；溜宠（宠物项圈 / 玛蕾菲雅的项链让宠物跟着走）；转生过的人装备道具不看等级。
+- **免遇敌装备**：太阳神的首饰（特定楼层不遇敌）、月亮首饰与星星之守护（降低遇敌率），照原版 ITEM_equipNoenemy / ITEM_randEnemyEquip。
 - **战斗**：遇敌、回合制指令、速度排序、闪避 / 会心 / 防御 / 属性相克 / 反击 / 连击 / 偷袭 / 守护、异常状态、敌人 AI 与几十种宠物技能、
   咒术与攻击魔法、战斗道具与变身、捕捉、换宠物、骑宠作战与落马、经验与升级加点、战利品、结果窗口、自动战斗（原版 AI 模式与设定窗口）。
 - **道具**：9 个装备位 + 3 页道具栏、装备加成、各种使用道具、地上的道具与石币、耐久与磨损、改名笔、拼图、宠物道具栏、

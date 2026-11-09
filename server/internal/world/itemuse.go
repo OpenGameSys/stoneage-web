@@ -126,7 +126,7 @@ func (w *World) ItemUse(charID, slot, target int) {
 			}
 		case "ITEM_MysteriousGift", "ITEM_Refresh", "ITEM_Luck", "ITEM_Gold", "ITEM_AddFame", "ITEM_useSkup", "ITEM_useNoenemy",
 			"ITEM_useEncounter", "ITEM_useDeathcounter", "ITEM_useMaxRedSocks", "ITEM_useMaxRedSocksNew", "ITEM_changePetOwner",
-			"ITEM_useRenameItem", "ITEM_WaterWordStatus":
+			"ITEM_useRenameItem", "ITEM_WaterWordStatus", "ITEM_randEnemyEquipOne":
 			w.useItem2(e, slot, def, pet)
 		case "ITEM_useStatusChange", "ITEM_useStatusRecovery", "ITEM_useCaptureUp", "ITEM_useMRecovery",
 			"ITEM_useImprecate", "ITEM_useRessurect", "ITEM_useFieldChange", "ITEM_firecracker", "ITEM_ResAndDef", "ITEM_useMagic":

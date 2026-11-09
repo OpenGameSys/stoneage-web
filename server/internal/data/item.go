@@ -65,6 +65,8 @@ type ItemDef struct {
 	Memo        string // effectstring：道具说明
 	Argument    string // 道具参数，如回复道具的 "体20"
 	UseFunc     string // usefunc，如 ITEM_useRecovery
+	AttachFunc  string // attachfunc：装上时（含上线时装着的，CHAR_login）执行，如太阳神的首饰的 ITEM_equipNoenemy
+	DetachFunc  string // detachfunc：拿下时执行
 	Image       int
 	Cost        int
 	Type        int
@@ -118,7 +120,7 @@ func LoadItems(dataDir string) (map[int]*ItemDef, error) {
 			a, b := v(col), v(col+1)
 			return [2]int{min(a, b), max(a, b)}
 		}
-		d := &ItemDef{Name: c[0], SecretName: c[1], Memo: c[2], Argument: c[3], UseFunc: c[10],
+		d := &ItemDef{Name: c[0], SecretName: c[1], Memo: c[2], Argument: c[3], UseFunc: c[10], AttachFunc: strings.TrimSpace(c[11]), DetachFunc: strings.TrimSpace(c[12]),
 			ID: v(17), Image: v(18), Cost: v(19), Type: v(20), Field: v(21), Target: v(22), Level: v(23),
 			MaxPile: v(25), Durability: v(32), AttackMin: v(36), AttackMax: v(37),
 			Attrib: v(54), AttribValue: v(55), MagicID: num(c[55], -1), MagicMP: v(58), VanishDrop: v(90) == 1, Uses: v(24), DurInit: v(31),

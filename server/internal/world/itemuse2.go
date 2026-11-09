@@ -55,6 +55,8 @@ func (w *World) useItem2(e *entity, slot int, def *data.ItemDef, pet *Pet) {
 		w.sysMsg(e, "你感受到周边的杀气消失了。", colorWhite)
 		w.useUp(e, slot)
 		w.itemsChanged(e)
+	case "ITEM_randEnemyEquipOne":
+		w.useRandEnemyOne(e, slot, def)
 	case "ITEM_useEncounter":
 		e.stay = true
 		w.sysMsg(e, "你感受到周边突然充满杀气！", colorYellow)

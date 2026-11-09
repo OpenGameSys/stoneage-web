@@ -173,7 +173,7 @@ export class Menus {
     this.ui = ui; this.host = host;
     try { album.load(localStorage.getItem("sa-account") ?? ""); } catch { album.load(""); }
     this.items = new ItemWindow({
-      ui, level: () => host.status?.level ?? 1, mp: () => host.status?.mp ?? 0, name: () => host.status?.name ?? "",
+      ui, level: () => host.status?.level ?? 1, trans: () => host.status?.trans ?? 0, mp: () => host.status?.mp ?? 0, name: () => host.status?.name ?? "",
       pets: () => (this.pets?.pets ?? []).map((p) => ({ slot: p.slot, name: p.freeName || p.name })),
       partyMembers: () => host.party().map((p, slot) => p && p.id !== host.selfId() ? { slot, name: p.name } : null).filter((x): x is { slot: number; name: string } => x !== null),
       move: (f, t) => host.itemMove(f, t), use: (s, t) => host.itemUse(s, t), drop: (s, n) => host.itemDrop(s, n),

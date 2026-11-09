@@ -150,6 +150,13 @@ class Fighter {
       if (now < this.pauseAt + this.pauseMs) now = this.pauseAt;
       else { this.actAt += this.pauseMs; this.pauseAt = 0; }
     }
+    if (this.f.sprite > 0 && this.f.sprite < 100000) {
+      // 不是动画编号而是地图图号（矿石、药草、火山口等）：照原版 pattern.cpp 画那张静态图（realGetNo / realGetPos，
+      // 位移在图像资料里，ui.image 会套上）；没有动作可播，命中帧直接触发
+      if (this.onHit && !this.hitDone) { this.hitDone = true; this.onHit(); }
+      const idx = assets.tile(this.f.sprite);
+      return idx === undefined ? null : [idx, 0, 0];
+    }
     const def = assets.anim(this.f.sprite);
     if (!def) return null;
     let act: AnimAction | undefined = findAction(def, this.dir, this.action);

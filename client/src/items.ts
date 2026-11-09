@@ -76,6 +76,7 @@ export function petEquipSlot(type: number): number {
 export interface ItemHost {
   ui: Ui;
   level(): number;
+  trans(): number;          // 转生次数：转生过的人装备 / 使用道具不看等级（char_item.c CHAR_EquipItem，原客户端 menu.cpp 的标红也是 pc.transmigration == 0 才比等级）
   mp(): number;
   name(): string;
   pets(): { slot: number; name: string }[]; // 宠物栏（选对象的窗口列出）
@@ -590,7 +591,7 @@ export class ItemWindow {
     const ui = this.host.ui, wx = this.wx, wy = this.wy;
     const pe = petEquipSlot(it.type);
     // 宠物装备按宠物页那只宠物的等级（人物页看不出给哪一只，不标红）
-    const myLevel = pe >= 0 ? petLevel ?? (this.petPage ? this.pet()?.level : undefined) ?? Infinity : this.host.level();
+    const myLevel = pe >= 0 ? petLevel ?? (this.petPage ? this.pet()?.level : undefined) ?? Infinity : this.host.trans() > 0 ? Infinity : this.host.level();
     const color = it.level > myLevel ? FONT.RED : it.merged ? FONT.YELLOW : FONT.WHITE; // 加工出来的黄色（ITEM_MERGEFLG）
     ui.text(wx + 16, wy + 331, it.name, color);
     if (it.damage) ui.text(wx + 150, wy + 331, `耐久度(${it.damage})`, color);

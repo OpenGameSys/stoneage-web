@@ -406,6 +406,12 @@ func (w *World) ItemMove(charID, from, to int) {
 			}
 		}
 		inv[from], inv[to] = other, it
+		switch { // attachfunc / detachfunc（装备位之间互换不算）
+		case to < data.EquipSlots && from >= data.EquipSlots:
+			w.equipChanged(e, other, it)
+		case from < data.EquipSlots && to >= data.EquipSlots:
+			w.equipChanged(e, it, other)
+		}
 		w.itemsChanged(e)
 	})
 }

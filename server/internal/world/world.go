@@ -96,6 +96,7 @@ type entity struct {
 	pets      *petBag            // 宠物栏（pet.go）
 	magic     *battle.MagicSkill // 魔法熟练度与抗魔（characters.magic）
 	noenemy   int                // 驱魔（ITEM_useNoenemy）：剩下的分钟数，> 0 不遇敌（原版记在连线上，不存档）
+	eqRand    int                // 月亮首饰 / 星星之守护的 eqrandenemy（noenemy.go），不存档
 	stay      bool               // 原地遇敌（ITEM_useEncounter / UseDeathCounter），走动或传送就取消
 	water     int                // 水中呼吸剩下的分钟数（鱼鳃草，CHAR_WORKSTATUSWATER，不存档）
 	lastMerge int64              // 上次加工 / 料理的时间（CHAR_WORKLASTMERGETIME，unix 秒）
@@ -358,6 +359,7 @@ func (w *World) Enter(c store.Character, cl Client) {
 		cl.Send(&proto.Flags{Flags: e.fs})
 		cl.Send(w.statusOf(e))
 		w.sendInventory(e)
+		w.loginAttach(e) // CHAR_login：装着的道具执行 attachfunc（太阳神 / 月亮首饰）
 		w.sendPets(e)
 		w.sendQuests(e)
 		w.placeOnFloor(e, c.Floor, c.X, c.Y, c.Dir)

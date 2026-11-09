@@ -196,7 +196,7 @@ func TestPickEnemiesFromRealData(t *testing.T) {
 			t.Fatalf("未找到區域 %d", areaIdx)
 		}
 		for sample := 0; sample < 100; sample++ {
-			specs := PickEnemies(bd, targetArea, r)
+			specs := PickEnemies(bd, targetArea, r, nil)
 			for _, s := range specs {
 				if s.Enemy.LvMax > 10 {
 					t.Fatalf("薩村外圍區域 %d 出現高等怪（ID: %d, LvMax: %d > 10）",
