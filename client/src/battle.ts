@@ -303,7 +303,7 @@ export class BattleScreen {
     this.pvp = m.pvp;
     this.event = m.event;
     this.turnMs = m.turnTime;
-    speedMul = m.speed > 0 ? Math.max(0.25, Math.min(4, m.speed / 100)) : 1;
+    speedMul = m.speed > 0 ? Math.max(0.25, Math.min(16, m.speed / 100)) : 1;
     this.surprise = m.surprise;
     for (const f of m.fighters) {
       album.seen(f.sprite); // CheckBattleNewPet

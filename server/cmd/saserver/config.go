@@ -82,8 +82,8 @@ func (c RulesConfig) world() (world.Rules, error) {
 		return world.Rules{}, errors.New("rules.vendorTax 要在 0..100")
 	case c.WalkSpeed < 0.25 || c.WalkSpeed > 4:
 		return world.Rules{}, errors.New("rules.walkSpeed 要在 0.25..4")
-	case c.BattleSpeed < 0.25 || c.BattleSpeed > 4:
-		return world.Rules{}, errors.New("rules.battleSpeed 要在 0.25..4")
+	case c.BattleSpeed < 0.25 || c.BattleSpeed > 16:
+		return world.Rules{}, errors.New("rules.battleSpeed 要在 0.25..16")
 	case c.EnemyGuard < 0 || c.EnemyGuard > 1:
 		return world.Rules{}, errors.New("rules.enemyGuardRate 要在 0..1")
 	case c.PetDeathLoss < 0 || c.PetDeathLoss > 10:
