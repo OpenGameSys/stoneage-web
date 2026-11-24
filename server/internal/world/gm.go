@@ -53,6 +53,10 @@ var gmMenu = []proto.GmItem{
 	{Group: "角色", Cmd: "/luck", Name: "设定运气", Args: []string{"运气"}, Kinds: []string{"opt:1|2|3|4|5"}, Defaults: []string{"5"}, Hint: "影响会心、捕获等（原版每个游戏日重抽）"},
 	{Group: "角色", Cmd: "/hp", Name: "设定耐久力", Args: []string{"HP"}, Kinds: []string{""}, Defaults: []string{"1"}, Hint: "现在的 HP（不超过最大值），测补血用"},
 	{Group: "角色", Cmd: "/mp", Name: "设定气力", Args: []string{"MP"}, Kinds: []string{""}, Defaults: []string{"0"}, Hint: "现在的 MP（不超过最大值）"},
+	{Group: "角色", Cmd: "/bspeed", Name: "战斗加速", Args: []string{"倍数"}, Kinds: []string{""}, Defaults: []string{"3"},
+		Hint: "战斗演出快慢（0.25..16，1 是原版，推荐 3），下一场战斗生效；改 config.yaml 的 rules.battleSpeed 可永久固定"},
+	{Group: "角色", Cmd: "/sprite", Name: "切换形象", Args: []string{"形象号"}, Kinds: []string{""}, Defaults: []string{"100700"},
+		Hint: "立刻换外观，周围的人马上看到（100000..106200）。100700-100819 段保留骑乘，其它段会失去骑乘"},
 	{Group: "角色", Cmd: "/heal", Name: "全部回复", Hint: "自己与宠物的 HP、MP 回满"},
 	{Group: "物品", Cmd: "/item", Name: "给道具", Args: []string{"道具", "个数"}, Kinds: []string{"item", ""}, Defaults: []string{"", "1"}, Hint: "点\"选择\"从全部道具里挑，也可以直接打编号"},
 	{Group: "物品", Cmd: "/gold", Name: "设定石币", Args: []string{"数量"}, Kinds: []string{""}, Defaults: []string{"1000000"}, Hint: "不超过这个转生次数的石币上限"},
@@ -275,6 +279,32 @@ func (w *World) gmCommand(e *entity, text string) bool {
 			n++
 		}
 		reply("在线 %d 人：%s", n, b.String())
+	case "/bspeed": // /bspeed 倍数：战斗演出速度（0.25..16），下一场战斗生效
+		if len(f) < 2 {
+			bad = true
+			return usage()
+		}
+		v, err := strconv.ParseFloat(f[1], 64)
+		if err != nil || v < 0.25 || v > 16 {
+			bad = true
+			return usage()
+		}
+		w.Rules.BattleSpeed = v
+		reply("战斗演出速度设为 %g 倍（下一场战斗生效）", v)
+	case "/sprite": // /sprite 形象号：改存档里的形象并广播，不用重登
+		n := num(1, 100000, 106200)
+		if bad {
+			return usage()
+		}
+		c.Sprite = n
+		e.sprite = n
+		for _, o := range w.floors[e.floor] {
+			if o.client != nil && (o == e || o.visible[e.id]) {
+				o.client.Send(&proto.ObjSprite{ID: e.id, Sprite: n})
+			}
+		}
+		changed()
+		reply("形象设为 %d", n)
 	case "/heal":
 		w.healAll(e)
 		reply("自己与宠物都回满了")
